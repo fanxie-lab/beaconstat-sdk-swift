@@ -26,6 +26,7 @@ struct EnvironmentCollector {
         env.merge(deviceKeys()) { _, new in new }
         env.merge(sdkKeys()) { _, new in new }
         env.merge(runContextKeys()) { _, new in new }
+        env.merge(appAndLocaleKeys()) { _, new in new }
         return env
     }
 
@@ -103,6 +104,47 @@ struct EnvironmentCollector {
         #else
         return false
         #endif
+    }
+
+    // MARK: - app.* / locale / timezone / user_preference.*
+
+    private func appAndLocaleKeys() -> [String: String] {
+        var d: [String: String] = [:]
+        if let appVersion { d["app.version"] = appVersion }
+        if let appBuild { d["app.build"] = appBuild }
+        d["locale"] = Locale.current.identifier
+        d["timezone"] = TimeZone.current.identifier
+        let (language, region) = Self.languageAndRegion()
+        if let language { d["user_preference.language"] = language }
+        if let region { d["user_preference.region"] = region }
+        d["user_preference.color_scheme"] = Self.colorScheme()
+        d["user_preference.layout_direction"] = Self.layoutDirection(language: language)
+        return d
+    }
+
+    static func languageAndRegion() -> (String?, String?) {
+        if #available(iOS 16, macOS 13, tvOS 16, watchOS 9, *) {
+            return (Locale.current.language.languageCode?.identifier,
+                    Locale.current.region?.identifier)
+        } else {
+            return (Locale.current.languageCode, Locale.current.regionCode)
+        }
+    }
+
+    static func colorScheme() -> String {
+        #if canImport(UIKit) && !os(watchOS)
+        return UITraitCollection.current.userInterfaceStyle == .dark ? "dark" : "light"
+        #elseif os(macOS)
+        let isDark = UserDefaults.standard.string(forKey: "AppleInterfaceStyle")?.lowercased() == "dark"
+        return isDark ? "dark" : "light"
+        #else
+        return "light"
+        #endif
+    }
+
+    static func layoutDirection(language: String?) -> String {
+        let lang = language ?? Locale.current.identifier
+        return Locale.characterDirection(forLanguage: lang) == .rightToLeft ? "rtl" : "ltr"
     }
 
     // MARK: - Static platform helpers

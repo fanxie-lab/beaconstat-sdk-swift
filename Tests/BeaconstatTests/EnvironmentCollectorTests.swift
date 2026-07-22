@@ -51,4 +51,30 @@ final class EnvironmentCollectorTests: XCTestCase {
     func testTargetEnvironmentIsNativeOnMac() {
         XCTAssertEqual(env()["run_context.target_environment"], "native")
     }
+
+    func testAppKeysOmittedWhenNil() {
+        let e = env(appVersion: nil, appBuild: nil)
+        XCTAssertNil(e["app.version"])
+        XCTAssertNil(e["app.build"])
+    }
+
+    func testAppKeysIncludedWhenProvided() {
+        let e = env(appVersion: "1.5.0", appBuild: "500")
+        XCTAssertEqual(e["app.version"], "1.5.0")
+        XCTAssertEqual(e["app.build"], "500")
+    }
+
+    func testLocaleAndTimezonePresent() {
+        let e = env()
+        XCTAssertNotNil(e["locale"])
+        XCTAssertNotNil(e["timezone"])
+    }
+
+    func testColorSchemeIsLightOrDark() {
+        XCTAssertTrue(["light", "dark"].contains(env()["user_preference.color_scheme"] ?? ""))
+    }
+
+    func testLayoutDirectionIsLtrOrRtl() {
+        XCTAssertTrue(["ltr", "rtl"].contains(env()["user_preference.layout_direction"] ?? ""))
+    }
 }
