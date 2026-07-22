@@ -1,14 +1,14 @@
 import Foundation
 
 /// Controls how test events are routed (spec §4.6).
-public enum TestMode: Equatable {
+public enum TestMode: Equatable, Sendable {
     case automatic       // route to /v1/debug/events under DEBUG or simulator
     case forceProduction // always /v1/events
     case forceTest       // always /v1/debug/events
 }
 
 /// Tunable SDK behavior. Defaults are tuned for first-party dogfooding.
-public struct BeaconstatOptions {
+public struct BeaconstatOptions: Sendable {
     public var testMode: TestMode
     public var batchSize: Int
     public var flushInterval: TimeInterval

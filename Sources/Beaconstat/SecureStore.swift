@@ -45,6 +45,7 @@ final class KeychainSecureStore: SecureStore {
     func string(forKey key: SecureStoreKey) -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
+            kSecUseDataProtectionKeychain as String: true,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key.rawValue,
             kSecReturnData as String: true,
@@ -59,16 +60,29 @@ final class KeychainSecureStore: SecureStore {
     }
 
     func set(_ value: String?, forKey key: SecureStoreKey) {
+        _ = write(value, forKey: key)
+    }
+
+    /// Returns whether the write (or delete) succeeded. `set` ignores it to
+    /// keep the protocol total; internal callers can use this if they care.
+    @discardableResult
+    func write(_ value: String?, forKey key: SecureStoreKey) -> Bool {
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
+            kSecUseDataProtectionKeychain as String: true,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key.rawValue,
         ]
-        SecItemDelete(base as CFDictionary) // idempotent
-        guard let value, let data = value.data(using: .utf8) else { return }
+        let deleteStatus = SecItemDelete(base as CFDictionary)
+        guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
+            return false
+        }
+        guard let value, let data = value.data(using: .utf8) else {
+            return true // nil value = delete only
+        }
         var add = base
         add[kSecValueData as String] = data
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(add as CFDictionary, nil)
+        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 }

@@ -24,3 +24,21 @@ final class InMemorySecureStoreTests: XCTestCase {
         XCTAssertEqual(store.string(forKey: .lastKnownBuild), "421")
     }
 }
+
+final class SendableAndKeychainShapeTests: XCTestCase {
+    // Compiles only if BeaconstatOptions/TestMode are Sendable.
+    func testOptionsAreSendable() {
+        func requireSendable<T: Sendable>(_ : T.Type) {}
+        requireSendable(BeaconstatOptions.self)
+        requireSendable(TestMode.self)
+    }
+
+    // InMemory behavior must remain unchanged after the Keychain refactor.
+    func testInMemoryStillRoundTrips() {
+        let s = InMemorySecureStore()
+        s.set("bcs_tok_x", forKey: .siteToken)
+        XCTAssertEqual(s.string(forKey: .siteToken), "bcs_tok_x")
+        s.set(nil, forKey: .siteToken)
+        XCTAssertNil(s.string(forKey: .siteToken))
+    }
+}
