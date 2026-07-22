@@ -25,6 +25,7 @@ struct EnvironmentCollector {
         var env: [String: String] = [:]
         env.merge(deviceKeys()) { _, new in new }
         env.merge(sdkKeys()) { _, new in new }
+        env.merge(runContextKeys()) { _, new in new }
         return env
     }
 
@@ -52,6 +53,56 @@ struct EnvironmentCollector {
 
     private func sdkKeys() -> [String: String] {
         ["sdk.name": "beaconstat-swift", "sdk.version": sdkVersion]
+    }
+
+    // MARK: - run_context.*
+
+    private func runContextKeys() -> [String: String] {
+        let flags = Self.runContextFlags()
+        return [
+            "run_context.is_debug": flags.debug ? "true" : "false",
+            "run_context.is_simulator": flags.simulator ? "true" : "false",
+            "run_context.is_testflight": flags.testflight ? "true" : "false",
+            "run_context.is_app_store": flags.appStore ? "true" : "false",
+            "run_context.target_environment": Self.targetEnvironment(),
+        ]
+    }
+
+    /// Exactly one flag is true, with precedence debug > simulator > testflight > app_store.
+    static func runContextFlags() -> (debug: Bool, simulator: Bool, testflight: Bool, appStore: Bool) {
+        var debug = false
+        #if DEBUG
+        debug = true
+        #endif
+        var simulatorBuild = false
+        #if targetEnvironment(simulator)
+        simulatorBuild = true
+        #endif
+        let simulator = simulatorBuild && !debug
+        let testflight = !debug && !simulator && isSandboxReceipt()
+        let appStore = !debug && !simulator && !testflight
+        return (debug, simulator, testflight, appStore)
+    }
+
+    static func targetEnvironment() -> String {
+        #if targetEnvironment(macCatalyst)
+        return "mac_catalyst"
+        #elseif targetEnvironment(simulator)
+        return "simulator"
+        #elseif os(iOS)
+        return ProcessInfo.processInfo.isiOSAppOnMac ? "ios_on_mac" : "native"
+        #else
+        return "native"
+        #endif
+    }
+
+    static func isSandboxReceipt() -> Bool {
+        #if os(iOS) || os(macOS)
+        guard let url = Bundle.main.appStoreReceiptURL else { return false }
+        return url.lastPathComponent == "sandboxReceipt"
+        #else
+        return false
+        #endif
     }
 
     // MARK: - Static platform helpers

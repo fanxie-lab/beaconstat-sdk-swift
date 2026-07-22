@@ -34,4 +34,21 @@ final class EnvironmentCollectorTests: XCTestCase {
     func testNoOrientationOnMac() {
         XCTAssertNil(env()["device.orientation"])
     }
+
+    func testExactlyOneRunContextFlagIsTrue() {
+        let e = env()
+        let flags = ["run_context.is_debug", "run_context.is_simulator",
+                     "run_context.is_testflight", "run_context.is_app_store"]
+        XCTAssertEqual(flags.filter { e[$0] == "true" }.count, 1)
+        // All four keys must be present and boolean-valued.
+        for f in flags { XCTAssertTrue(e[f] == "true" || e[f] == "false") }
+    }
+
+    func testDebugIsTrueUnderSwiftTest() {
+        XCTAssertEqual(env()["run_context.is_debug"], "true")
+    }
+
+    func testTargetEnvironmentIsNativeOnMac() {
+        XCTAssertEqual(env()["run_context.target_environment"], "native")
+    }
 }
