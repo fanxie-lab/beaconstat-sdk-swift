@@ -20,6 +20,9 @@ public struct BeaconstatOptions: Sendable {
     public var collectAccessibility: Bool
     /// Override the ingest base URL (dev / self-host). Defaults to production.
     public var endpoint: URL?
+    /// The host app's version, sent on the wire as `productVersion`. The
+    /// facade fills this from `CFBundleShortVersionString` when left `nil`.
+    public var productVersion: String?
 
     public init(
         testMode: TestMode = .automatic,
@@ -31,7 +34,8 @@ public struct BeaconstatOptions: Sendable {
         maxRetries: Int = 3,
         debugLogging: Bool = false,
         collectAccessibility: Bool = true,
-        endpoint: URL? = nil
+        endpoint: URL? = nil,
+        productVersion: String? = nil
     ) {
         self.testMode = testMode
         self.batchSize = batchSize
@@ -43,7 +47,12 @@ public struct BeaconstatOptions: Sendable {
         self.debugLogging = debugLogging
         self.collectAccessibility = collectAccessibility
         self.endpoint = endpoint
+        self.productVersion = productVersion
     }
+
+    /// `productVersion` on the wire, defaulted when the host didn't set one
+    /// (and the facade couldn't find `CFBundleShortVersionString`).
+    var productVersionOrDefault: String { productVersion ?? "0.0.0" }
 
     /// Build-config-aware flush cadence: fast in development, battery/data
     /// friendly in release. Overridable via `flushInterval`.

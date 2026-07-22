@@ -2,8 +2,8 @@ import Foundation
 
 /// Public entry point for the BeaconStat Swift SDK.
 ///
-/// Phase 1: all methods are no-ops that compile. Phase 2 forwards these to a
-/// thread-safe core on a serial queue. The public surface here is frozen.
+/// Forwards to `BeaconstatCore`, a thread-safe orchestrator on a serial queue.
+/// The public surface here is frozen.
 public enum Beaconstat {
     /// Configure the SDK. `hmacSecret` is the 64-char hex signing secret
     /// (NOT the `bcs_sec_…` key). Never throws into the host.
@@ -12,27 +12,32 @@ public enum Beaconstat {
     }
 
     public static func configure(publicKey: String, hmacSecret: String, options: BeaconstatOptions) {
-        // No-op in Phase 1.
+        // Snapshot environment + app version on the CALLER's thread (App init = main),
+        // so UIKit state is never read from the core's serial background queue.
+        var opts = options
+        let bundle = Bundle.main
+        let appVersion = bundle.infoDictionary?["CFBundleShortVersionString"] as? String
+        let appBuild = bundle.infoDictionary?["CFBundleVersion"] as? String
+        if opts.productVersion == nil { opts.productVersion = appVersion }
+        let environment = EnvironmentCollector(sdkVersion: BeaconstatVersion.current,
+                                               appVersion: appVersion, appBuild: appBuild,
+                                               collectAccessibility: opts.collectAccessibility).collect()
+        BeaconstatCore.shared.configure(publicKey: publicKey, hmacSecret: hmacSecret,
+                                        options: opts, environment: environment)
     }
 
     /// Track a custom event. Property values are strings.
     public static func track(_ name: String, properties: [String: String] = [:]) {
-        // No-op in Phase 1.
+        BeaconstatCore.shared.track(name, properties: properties)
     }
 
     /// Force-send queued events (best-effort, async).
-    public static func flush() {
-        // No-op in Phase 1.
-    }
+    public static func flush() { BeaconstatCore.shared.flush() }
 
     /// Host-controlled kill switch. When opted out, the SDK collects/sends nothing.
-    public static func optOut() {
-        // No-op in Phase 1.
-    }
+    public static func optOut() { BeaconstatCore.shared.optOut() }
 
-    public static func optIn() {
-        // No-op in Phase 1.
-    }
+    public static func optIn() { BeaconstatCore.shared.optIn() }
 
-    public static var isOptedOut: Bool { false }
+    public static var isOptedOut: Bool { BeaconstatCore.shared.isOptedOut }
 }
