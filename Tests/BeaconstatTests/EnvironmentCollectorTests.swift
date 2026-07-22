@@ -77,4 +77,42 @@ final class EnvironmentCollectorTests: XCTestCase {
     func testLayoutDirectionIsLtrOrRtl() {
         XCTAssertTrue(["ltr", "rtl"].contains(env()["user_preference.layout_direction"] ?? ""))
     }
+
+    func testAccessibilityKeysPresentOnMac() {
+        let e = env(collectAccessibility: true)
+        XCTAssertNotNil(e["accessibility.reduce_motion"])
+        XCTAssertNotNil(e["accessibility.reduce_transparency"])
+        XCTAssertNotNil(e["accessibility.invert_colors"])
+        XCTAssertNotNil(e["accessibility.darker_system_colors"])
+        XCTAssertNotNil(e["accessibility.differentiate_without_color"])
+    }
+
+    func testMacOmitsBoldTextAndContentSize() {
+        let e = env(collectAccessibility: true)
+        XCTAssertNil(e["accessibility.bold_text"])
+        XCTAssertNil(e["accessibility.preferred_content_size"])
+    }
+
+    func testAccessibilityDisabledOmitsAllAccessibilityKeys() {
+        let e = env(collectAccessibility: false)
+        XCTAssertTrue(e.keys.filter { $0.hasPrefix("accessibility.") }.isEmpty)
+    }
+
+    func testEveryEnvKeyIsContractValid() {
+        // Contract guard: env keys match the key regex and never start with `_bcs.`.
+        let e = env(collectAccessibility: true)
+        let pattern = "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"
+        let regex = try! NSRegularExpression(pattern: pattern)
+        for key in e.keys {
+            XCTAssertFalse(key.hasPrefix("_bcs."), "env key must not start with _bcs.: \(key)")
+            let range = NSRange(key.startIndex..., in: key)
+            XCTAssertNotNil(regex.firstMatch(in: key, range: range), "invalid env key: \(key)")
+            XCTAssertLessThanOrEqual(key.count, 100)
+        }
+        // All values are non-empty strings ≤ 1024 chars.
+        for (key, value) in e {
+            XCTAssertFalse(value.isEmpty, "empty value for \(key)")
+            XCTAssertLessThanOrEqual(value.count, 1024)
+        }
+    }
 }

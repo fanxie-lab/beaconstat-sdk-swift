@@ -27,6 +27,9 @@ struct EnvironmentCollector {
         env.merge(sdkKeys()) { _, new in new }
         env.merge(runContextKeys()) { _, new in new }
         env.merge(appAndLocaleKeys()) { _, new in new }
+        if collectAccessibility {
+            env.merge(accessibilityKeys()) { _, new in new }
+        }
         return env
     }
 
@@ -146,6 +149,50 @@ struct EnvironmentCollector {
         let lang = language ?? Locale.current.identifier
         return Locale.characterDirection(forLanguage: lang) == .rightToLeft ? "rtl" : "ltr"
     }
+
+    // MARK: - accessibility.*
+
+    private func accessibilityKeys() -> [String: String] {
+        var d: [String: String] = [:]
+        #if canImport(UIKit) && !os(watchOS)
+        d["accessibility.bold_text"] = UIAccessibility.isBoldTextEnabled ? "true" : "false"
+        d["accessibility.reduce_motion"] = UIAccessibility.isReduceMotionEnabled ? "true" : "false"
+        d["accessibility.reduce_transparency"] = UIAccessibility.isReduceTransparencyEnabled ? "true" : "false"
+        d["accessibility.invert_colors"] = UIAccessibility.isInvertColorsEnabled ? "true" : "false"
+        d["accessibility.darker_system_colors"] = UIAccessibility.isDarkerSystemColorsEnabled ? "true" : "false"
+        d["accessibility.differentiate_without_color"] = UIAccessibility.shouldDifferentiateWithoutColor ? "true" : "false"
+        d["accessibility.preferred_content_size"] = Self.contentSizeToken(UITraitCollection.current.preferredContentSizeCategory)
+        #elseif os(macOS)
+        let workspace = NSWorkspace.shared
+        d["accessibility.reduce_motion"] = workspace.accessibilityDisplayShouldReduceMotion ? "true" : "false"
+        d["accessibility.reduce_transparency"] = workspace.accessibilityDisplayShouldReduceTransparency ? "true" : "false"
+        d["accessibility.invert_colors"] = workspace.accessibilityDisplayShouldInvertColors ? "true" : "false"
+        d["accessibility.darker_system_colors"] = workspace.accessibilityDisplayShouldIncreaseContrast ? "true" : "false"
+        d["accessibility.differentiate_without_color"] = workspace.accessibilityDisplayShouldDifferentiateWithoutColor ? "true" : "false"
+        // bold_text and preferred_content_size have no macOS API → omitted.
+        #endif
+        return d
+    }
+
+    #if canImport(UIKit) && !os(watchOS)
+    static func contentSizeToken(_ category: UIContentSizeCategory) -> String {
+        switch category {
+        case .extraSmall: return "XS"
+        case .small: return "S"
+        case .medium: return "M"
+        case .large: return "L"
+        case .extraLarge: return "XL"
+        case .extraExtraLarge: return "XXL"
+        case .extraExtraExtraLarge: return "XXXL"
+        case .accessibilityMedium: return "AX1"
+        case .accessibilityLarge: return "AX2"
+        case .accessibilityExtraLarge: return "AX3"
+        case .accessibilityExtraExtraLarge: return "AX4"
+        case .accessibilityExtraExtraExtraLarge: return "AX5"
+        default: return "L"
+        }
+    }
+    #endif
 
     // MARK: - Static platform helpers
 
