@@ -147,6 +147,7 @@ final class BeaconstatCore {
 
     private func startSessionThenInstall() {
         startSessionIfNeeded()
+        checkAppUpdate()
         emitInstallDetectedIfNeeded()
     }
 
@@ -175,6 +176,29 @@ final class BeaconstatCore {
         // batchSize or the periodic timer — attempt to send it right away.
         // (Later track() calls in Task 11 rely on the batch-size/timer path.)
         flushInternal()
+    }
+
+    /// Emits `_bcs.apple.app_updated` when the app version/build changed since the
+    /// last recorded run. Never on first install (no prior version recorded).
+    private func checkAppUpdate() {
+        let currentVersion = environment["app.version"] ?? ""
+        let currentBuild = environment["app.build"] ?? ""
+        let storedVersion = store.string(forKey: .lastKnownVersion)
+        let storedBuild = store.string(forKey: .lastKnownBuild)
+        if let storedVersion, storedVersion != currentVersion || storedBuild != currentBuild {
+            var props: [String: String] = [:]
+            if let sid = sessionManager?.currentSessionId() { props["_bcs.session.id"] = sid }
+            props["_bcs.apple.previous_version"] = storedVersion
+            if let storedBuild { props["_bcs.apple.previous_build"] = storedBuild }
+            enqueue(Event(name: "_bcs.apple.app_updated", time: clock.nowISO8601(), properties: props))
+            // Like install_detected, this is high-value and time-sensitive: send it
+            // right away rather than waiting for batchSize or the periodic timer —
+            // otherwise it would never flush on a non-first-install run where
+            // emitInstallDetectedIfNeeded's guard short-circuits before flushing.
+            flushInternal()
+        }
+        store.set(currentVersion, forKey: .lastKnownVersion)
+        store.set(currentBuild, forKey: .lastKnownBuild)
     }
 
     private func handleBackground() {
