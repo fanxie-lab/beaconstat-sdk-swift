@@ -6,6 +6,7 @@ enum SecureStoreKey: String, CaseIterable {
     case installId = "install_id"
     case hasEmittedInstall = "has_emitted_install"
     case lastSessionStartedAt = "last_session_started_at"
+    case hasStartedSession = "has_started_session"
     case lastKnownVersion = "last_known_version"
     case lastKnownBuild = "last_known_build"
     case optedOut = "opted_out"
