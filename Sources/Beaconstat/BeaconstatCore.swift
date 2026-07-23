@@ -28,6 +28,8 @@ final class BeaconstatCore {
     private var sessionManager: SessionManager?
     private var reachability: Reachability?
     private let reachabilityFactory: (DispatchQueue) -> Reachability?
+    private let lifecycleObserver: LifecycleObserver
+    private var lifecycleStarted = false
 
     init(store: SecureStore = FallbackSecureStore(
              primary: KeychainSecureStore(),
@@ -44,7 +46,8 @@ final class BeaconstatCore {
              #else
              return nil
              #endif
-         }) {
+         },
+         lifecycleObserver: LifecycleObserver = LifecycleObserver()) {
         self.store = store
         self.clock = clock
         self.sessionProvider = sessionProvider
@@ -52,6 +55,7 @@ final class BeaconstatCore {
         self.sdkVersion = sdkVersion
         self.queueFileURL = queueFileURL
         self.reachabilityFactory = reachabilityFactory
+        self.lifecycleObserver = lifecycleObserver
     }
 
     /// Default on-disk location for the persisted event queue.
@@ -98,6 +102,16 @@ final class BeaconstatCore {
                     r?.onReconnect = { [weak self] in self?.queue.async { self?.flushInternal() } }
                     r?.start()
                     self.reachability = r
+                }
+                if !self.lifecycleStarted {
+                    self.lifecycleObserver.onBackground = { [weak self] in
+                        self?.queue.async { self?.handleBackground() }
+                    }
+                    self.lifecycleObserver.onForeground = { [weak self] in
+                        self?.queue.async { self?.handleForeground() }
+                    }
+                    self.lifecycleObserver.start()
+                    self.lifecycleStarted = true
                 }
                 self.performHandshakeAndInstall()
             } catch {
@@ -161,6 +175,20 @@ final class BeaconstatCore {
         // batchSize or the periodic timer — attempt to send it right away.
         // (Later track() calls in Task 11 rely on the batch-size/timer path.)
         flushInternal()
+    }
+
+    private func handleBackground() {
+        guard let config = configuration, !isOptedOut else { return }
+        var props: [String: String] = [:]
+        if let sid = startSessionIfNeeded() { props["_bcs.session.id"] = sid }
+        enqueue(Event(name: "_bcs.apple.app_backgrounded", time: clock.nowISO8601(),
+                      properties: props.isEmpty ? nil : props))
+        if config.options.flushOnBackground { flushInternal() }
+    }
+
+    private func handleForeground() {
+        guard configuration != nil, !isOptedOut else { return }
+        startSessionIfNeeded() // resumes: emits session_started only if the timeout was exceeded
     }
 
     // MARK: - Queue + flush (M4)
