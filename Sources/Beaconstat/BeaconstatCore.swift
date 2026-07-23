@@ -11,6 +11,7 @@ final class BeaconstatCore {
     private let sessionProvider: (Configuration) -> URLSession
     private let bundleIdentifier: String
     private let sdkVersion: String
+    private let queueFileURL: URL
 
     private var configuration: Configuration?
     private var transport: Transport?
@@ -18,17 +19,31 @@ final class BeaconstatCore {
     private var siteToken: String?
     private var environment: [String: String] = [:]
     private var routesToTest = false
+    private var queue_: EventQueue?
+    private var flushTimer: DispatchSourceTimer?
+    private var flushing = false
+    private var stoppedForAuth = false
 
     init(store: SecureStore = KeychainSecureStore(),
          clock: Clock = SystemClock(),
          sessionProvider: @escaping (Configuration) -> URLSession = { _ in URLSession(configuration: .default) },
          bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "unknown",
-         sdkVersion: String = BeaconstatVersion.current) {
+         sdkVersion: String = BeaconstatVersion.current,
+         queueFileURL: URL = BeaconstatCore.defaultQueueFileURL()) {
         self.store = store
         self.clock = clock
         self.sessionProvider = sessionProvider
         self.bundleIdentifier = bundleIdentifier
         self.sdkVersion = sdkVersion
+        self.queueFileURL = queueFileURL
+    }
+
+    /// Default on-disk location for the persisted event queue.
+    static func defaultQueueFileURL() -> URL {
+        let base = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                 appropriateFor: nil, create: true))
+            ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("Beaconstat/queue.json")
     }
 
     // MARK: - Public entry points (hop onto the serial queue)
@@ -46,6 +61,9 @@ final class BeaconstatCore {
                     options.testMode, isDebug: debugBuild, isSimulator: Self.isSimulator)
                 self.transport = Transport(session: self.sessionProvider(config),
                                            baseURL: config.baseURL, logger: self.logger)
+                self.queue_ = EventQueue(store: FileEventStore(fileURL: self.queueFileURL),
+                                         maxQueued: options.maxQueuedEvents, logger: self.logger)
+                self.startFlushTimer(interval: options.flushInterval)
                 self.performHandshakeAndInstall()
             } catch {
                 self.logger.debug("configure rejected: \(error)")
@@ -83,22 +101,65 @@ final class BeaconstatCore {
         store.set("1", forKey: .hasEmittedInstall)
         let event = Event(name: "_bcs.install_detected", time: clock.nowISO8601(),
                           properties: ["_bcs.install.source": "app_store"])
-        sendImmediately([event]) // Task 9 replaces this with the persistent queue
+        enqueue(event)
+        // The install event is high-value and time-sensitive: don't wait for
+        // batchSize or the periodic timer — attempt to send it right away.
+        // (Later track() calls in Task 11 rely on the batch-size/timer path.)
+        flushInternal()
     }
 
-    /// Ad-hoc single-batch send (M3). Superseded by EventQueue/flush in Task 9.
-    private func sendImmediately(_ events: [Event]) {
-        guard let config = configuration, let transport = transport, let siteToken = siteToken else { return }
-        let batch = EventBatch(productVersion: config.options.productVersionOrDefault,
-                               environment: environment, events: events)
-        guard let bodyData = try? PayloadEncoder.encode(batch) else { return }
+    // MARK: - Queue + flush (M4)
+
+    private func enqueue(_ event: Event) {
+        guard !isOptedOut else { return }
+        queue_?.enqueue(event)
+        if let count = queue_?.count, let size = configuration?.options.batchSize, count >= size {
+            flushInternal()
+        }
+    }
+
+    func flush() { queue.async { self.flushInternal() } }
+
+    private func startFlushTimer(interval: TimeInterval) {
+        flushTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + interval, repeating: interval)
+        timer.setEventHandler { [weak self] in self?.flushInternal() }
+        timer.resume()
+        flushTimer = timer
+    }
+
+    /// Sends one batch (≤100). One in-flight flush at a time.
+    private func flushInternal() {
+        guard !flushing, !stoppedForAuth, !isOptedOut,
+              let config = configuration, let transport = transport, let siteToken = siteToken,
+              let queue_ = queue_ else { return }
+        let batch = queue_.peekBatch(max: 100)
+        guard !batch.isEmpty else { return }
+        let body = EventBatch(productVersion: config.options.productVersionOrDefault,
+                              environment: environment, events: batch)
+        guard let bodyData = try? PayloadEncoder.encode(body) else { return }
         let timestamp = clock.nowISO8601()
         let signature = Signer.sign(body: bodyData, publicKey: config.publicKey,
                                     hmacSecret: config.hmacSecret, timestamp: timestamp)
+        flushing = true
         transport.sendBatch(bodyData: bodyData, apiKey: config.publicKey, siteToken: siteToken,
                             signature: signature, timestamp: timestamp, isTest: routesToTest) { [weak self] result in
             self?.queue.async {
-                if case .failure(let e) = result { self?.logger.debug("send failed: \(e)") }
+                guard let self else { return }
+                self.flushing = false
+                switch result {
+                case .success:
+                    self.queue_?.removeFirst(batch.count)
+                case .failure(.badRequest):
+                    self.logger.debug("batch rejected (400) — dropping poison batch")
+                    self.queue_?.removeFirst(batch.count)
+                case .failure(.unauthorized):
+                    self.logger.debug("unauthorized — halting sends until reconfigured")
+                    self.stoppedForAuth = true
+                case .failure(let e):
+                    self.logger.debug("flush failed (\(e)) — keeping events for retry")
+                }
             }
         }
     }
@@ -120,10 +181,9 @@ final class BeaconstatCore {
         #endif
     }
 
-    // MARK: - Facade stubs (real bodies land in Tasks 9/11)
+    // MARK: - Facade stubs (real bodies land in Task 11)
 
     func track(_ name: String, properties: [String: String]) { /* Task 11 */ }
-    func flush() { /* Task 9 */ }
     func optOut() { queue.async { self.store.set("1", forKey: .optedOut) } }
     func optIn() { queue.async { self.store.set(nil, forKey: .optedOut) } }
     var isOptedOut: Bool { store.string(forKey: .optedOut) != nil }
