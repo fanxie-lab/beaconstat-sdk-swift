@@ -370,6 +370,24 @@ final class BeaconstatCore {
         enqueue(Event(name: name, time: clock.nowISO8601(), properties: props))
     }
 
+    func trackShortcut(_ type: String) {
+        queue.async {
+            guard !self.isOptedOut, self.configuration != nil else { return }
+            self.emitAppleEntry(name: "_bcs.apple.opened_from_shortcut",
+                                props: ["_bcs.apple.shortcut_type": type])
+        }
+    }
+
+    func trackWidget(kind: String?, family: String?) {
+        queue.async {
+            guard !self.isOptedOut, self.configuration != nil else { return }
+            var props: [String: String] = [:]
+            if let kind { props["_bcs.apple.widget_kind"] = kind }
+            if let family { props["_bcs.apple.widget_family"] = family }
+            self.emitAppleEntry(name: "_bcs.apple.opened_from_widget", props: props)
+        }
+    }
+
     func optOut() {
         queue.async {
             self.store.set("1", forKey: .optedOut)

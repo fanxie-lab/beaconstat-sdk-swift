@@ -49,4 +49,12 @@ public enum Beaconstat {
     public static func openedFromActivity(webpageURL: URL?) {
         BeaconstatCore.shared.trackOpenActivity(webpageURL)
     }
+
+    /// Report an iOS home-screen quick-action launch.
+    public static func openedFromShortcut(type: String) { BeaconstatCore.shared.trackShortcut(type) }
+
+    /// Report a launch from a WidgetKit widget / complication / Live Activity deep link.
+    public static func openedFromWidget(kind: String?, family: String?) {
+        BeaconstatCore.shared.trackWidget(kind: kind, family: family)
+    }
 }
