@@ -74,9 +74,14 @@ final class TransportTests: XCTestCase {
     }
 
     func testTestModeResolver() {
-        XCTAssertFalse(TestModeResolver.routesToTest(.forceProduction, isDebug: true, isSimulator: true))
-        XCTAssertTrue(TestModeResolver.routesToTest(.forceTest, isDebug: false, isSimulator: false))
-        XCTAssertTrue(TestModeResolver.routesToTest(.automatic, isDebug: true, isSimulator: false))
-        XCTAssertFalse(TestModeResolver.routesToTest(.automatic, isDebug: false, isSimulator: false))
+        // forceProduction/forceTest ignore run context.
+        XCTAssertFalse(TestModeResolver.routesToTest(.forceProduction, isDebug: true, isSimulator: true, isTestFlight: true, routeTestFlightToTest: true))
+        XCTAssertTrue(TestModeResolver.routesToTest(.forceTest, isDebug: false, isSimulator: false, isTestFlight: false, routeTestFlightToTest: false))
+        // automatic: DEBUG or simulator route to test.
+        XCTAssertTrue(TestModeResolver.routesToTest(.automatic, isDebug: true, isSimulator: false, isTestFlight: false, routeTestFlightToTest: false))
+        XCTAssertFalse(TestModeResolver.routesToTest(.automatic, isDebug: false, isSimulator: false, isTestFlight: false, routeTestFlightToTest: false))
+        // automatic + TestFlight: only routes to test when opted in.
+        XCTAssertFalse(TestModeResolver.routesToTest(.automatic, isDebug: false, isSimulator: false, isTestFlight: true, routeTestFlightToTest: false))
+        XCTAssertTrue(TestModeResolver.routesToTest(.automatic, isDebug: false, isSimulator: false, isTestFlight: true, routeTestFlightToTest: true))
     }
 }

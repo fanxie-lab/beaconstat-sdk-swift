@@ -83,7 +83,9 @@ final class BeaconstatCore {
                 self.environment = environment
                 self.stoppedForAuth = false   // reconfigure recovers from a prior 401
                 self.routesToTest = TestModeResolver.routesToTest(
-                    options.testMode, isDebug: Self.isDebugBuild, isSimulator: Self.isSimulator)
+                    options.testMode, isDebug: Self.isDebugBuild, isSimulator: Self.isSimulator,
+                    isTestFlight: environment["run_context.is_testflight"] == "true",
+                    routeTestFlightToTest: options.routeTestFlightToTest)
                 self.transport = Transport(session: self.sessionProvider(config),
                                            baseURL: config.baseURL, logger: self.logger)
                 // Reuse existing queue/session on reconfigure so an in-flight flush

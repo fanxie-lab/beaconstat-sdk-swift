@@ -23,6 +23,10 @@ public struct BeaconstatOptions: Sendable {
     /// The host app's version, sent on the wire as `productVersion`. The
     /// facade fills this from `CFBundleShortVersionString` when left `nil`.
     public var productVersion: String?
+    /// Under `.automatic` test mode, also route TestFlight builds to the test
+    /// endpoint. Defaults to `false` — TestFlight is a pre-release channel
+    /// closer to production; opt in if you want beta data segregated.
+    public var routeTestFlightToTest: Bool
 
     public init(
         testMode: TestMode = .automatic,
@@ -35,7 +39,8 @@ public struct BeaconstatOptions: Sendable {
         debugLogging: Bool = false,
         collectAccessibility: Bool = true,
         endpoint: URL? = nil,
-        productVersion: String? = nil
+        productVersion: String? = nil,
+        routeTestFlightToTest: Bool = false
     ) {
         self.testMode = testMode
         self.batchSize = batchSize
@@ -48,6 +53,7 @@ public struct BeaconstatOptions: Sendable {
         self.collectAccessibility = collectAccessibility
         self.endpoint = endpoint
         self.productVersion = productVersion
+        self.routeTestFlightToTest = routeTestFlightToTest
     }
 
     /// `productVersion` on the wire, defaulted when the host didn't set one
