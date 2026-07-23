@@ -23,6 +23,13 @@ final class MockURLProtocol: URLProtocol {
 
     static func reset() {
         handler = nil; capturedRequests = []; capturedBodies = []
+        // If a previous test left a request parked (forgot to release, or bailed
+        // out early via a failed assertion), wake it now instead of leaving it to
+        // block for up to 5s on a semaphore instance we're about to discard — a
+        // late-released thread could otherwise run `startLoading()`'s tail (using
+        // whatever `handler` the *next* test installs) and append into that next
+        // test's freshly-reset `capturedRequests`/`capturedBodies`, polluting it.
+        if holdEventsUntilReleased { releaseSemaphore.signal() }
         holdEventsUntilReleased = false
         releaseSemaphore = DispatchSemaphore(value: 0)
         receivedSemaphore = DispatchSemaphore(value: 0)

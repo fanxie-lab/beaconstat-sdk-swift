@@ -185,6 +185,17 @@ final class BeaconstatCoreSessionTests: XCTestCase {
     /// `optOut()` runs. The purge sees an already-empty queue, but the danger is
     /// the *completion* of that outstanding send resurrecting the batch via
     /// `prepend` once it fires. Proves the events never reappear on disk.
+    ///
+    /// IMPORTANT: `onQuiescent` now waits for all in-flight network ops to drain
+    /// (deterministic — see `outstandingNetworkOps` in BeaconstatCore), so it must
+    /// NEVER be called while the held `/events` response is still unreleased —
+    /// that would hang until the 3s expectation timeout. The sync point for
+    /// "opt-out landed before the completion" isn't a wall-clock wait at all: it
+    /// falls out of `queue` being a *serial* FIFO queue — `optOut()`'s `queue.async`
+    /// block is enqueued (from this test's call below) strictly before the held
+    /// send's completion handler can even be scheduled (that can't happen until
+    /// after `releaseHeldEventsRequest()` unblocks the parked response), so the
+    /// purge is always ordered ahead of the completion's opt-out-discard check.
     func testOptOutDiscardsInFlightBatch() {
         MockURLProtocol.handler = { req in
             req.url!.path.hasSuffix("/handshake")
@@ -198,22 +209,24 @@ final class BeaconstatCoreSessionTests: XCTestCase {
         var o = BeaconstatOptions(); o.flushInterval = 3600
         c.configure(publicKey: "bcs_pub_abcdef0123456789", hmacSecret: validHmac, options: o, environment: ["device.platform": "ios"])
 
-        // The install-detected flush fires its /events send immediately; wait until
-        // that request is in flight (batch already dequeued) but its response is held.
+        // The install-detected flush fires its /events send immediately; block
+        // (on the mock's own semaphore, NOT onQuiescent) until that request is
+        // in flight (batch already dequeued) but its response is parked.
         MockURLProtocol.waitForHeldEventsRequest()
 
-        // Opt out while the batch is checked out and in flight. Wait for the opt-out
-        // mutation itself (purge + timer cancellation) to land on the serial queue
-        // before releasing the held response, so the only race left under test is
-        // the one in the completion handler.
+        // Opt out while the batch is checked out and in flight. This enqueues the
+        // purge onto the serial queue now — before the held completion can even
+        // be scheduled — so ordering (not timing) guarantees it runs first.
         c.optOut()
-        let optedOut = expectation(description: "optedOut"); c.onQuiescent { optedOut.fulfill() }
-        wait(for: [optedOut], timeout: 3)
-        XCTAssertTrue(FileEventStore(fileURL: file).load().isEmpty) // purged while batch is in flight
 
-        // Now let the held response land as a 503. Pre-fix, this re-hops onto the
-        // serial queue and calls queue_?.prepend(batch), resurrecting the purged events.
+        // Release the parked 503. Pre-fix, its re-hop onto the serial queue would
+        // call queue_?.prepend(batch), resurrecting the purged events; the
+        // opted-out guard (running after the purge, by construction above) must
+        // discard it instead.
         MockURLProtocol.releaseHeldEventsRequest()
+
+        // Only now is it safe to ask for quiescence: the held op has been
+        // released, so it will actually drain instead of blocking the poll.
         let done = expectation(description: "flow"); c.onQuiescent { done.fulfill() }
         wait(for: [done], timeout: 3)
         XCTAssertTrue(FileEventStore(fileURL: file).load().isEmpty) // still empty: batch discarded, not resurrected

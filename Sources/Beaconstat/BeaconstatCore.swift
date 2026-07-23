@@ -22,6 +22,7 @@ final class BeaconstatCore {
     private var queue_: EventQueue?
     private var flushTimer: DispatchSourceTimer?
     private var flushing = false
+    private var outstandingNetworkOps = 0
     private var stoppedForAuth = false
     private var retryCount = 0
     private var retryTimer: DispatchSourceTimer?
@@ -82,6 +83,9 @@ final class BeaconstatCore {
                 self.configuration = config
                 self.environment = environment
                 self.stoppedForAuth = false   // reconfigure recovers from a prior 401
+                self.retryCount = 0
+                self.retryTimer?.cancel()
+                self.retryTimer = nil
                 self.routesToTest = TestModeResolver.routesToTest(
                     options.testMode, isDebug: Self.isDebugBuild, isSimulator: Self.isSimulator,
                     isTestFlight: environment["run_context.is_testflight"] == "true",
@@ -129,11 +133,13 @@ final class BeaconstatCore {
         let installId = Fingerprint.installId(store: store)
         let fingerprint = Fingerprint.compute(bundleIdentifier: bundleIdentifier, installId: installId)
         let environmentType = routesToTest ? "development" : "production"
+        outstandingNetworkOps += 1
         transport.handshake(apiKey: config.publicKey, fingerprint: fingerprint,
                             productVersion: config.options.productVersionOrDefault,
                             environmentType: environmentType) { [weak self] result in
             self?.queue.async {
                 guard let self else { return }
+                self.outstandingNetworkOps -= 1
                 switch result {
                 case .success(let resp):
                     self.siteToken = resp.siteToken
@@ -252,10 +258,12 @@ final class BeaconstatCore {
         let signature = Signer.sign(body: bodyData, publicKey: config.publicKey,
                                     hmacSecret: config.hmacSecret, timestamp: timestamp)
         flushing = true
+        outstandingNetworkOps += 1
         transport.sendBatch(bodyData: bodyData, apiKey: config.publicKey, siteToken: siteToken,
                             signature: signature, timestamp: timestamp, isTest: routesToTest) { [weak self] result in
             self?.queue.async {
                 guard let self else { return }
+                self.outstandingNetworkOps -= 1
                 self.flushing = false
                 guard !self.isOptedOut else { return } // opted out mid-flight -> discard this batch
                 switch result {
@@ -413,14 +421,17 @@ final class BeaconstatCore {
     // MARK: - Test hook
 
     #if DEBUG
-    /// Fires `block` once the serial queue has drained the currently-enqueued
-    /// work (including the async completion re-hops). Test-only convenience.
+    /// Fires `block` on main once all in-flight network work has drained
+    /// (deterministic — no fixed delay). Test-only.
     func onQuiescent(_ block: @escaping () -> Void) {
-        queue.async { DispatchQueue.main.async { self.settle(block) } }
+        queue.async { self.pollQuiescent(block) }
     }
-    private func settle(_ block: @escaping () -> Void) {
-        // Two more hops let handshake completion + follow-up send enqueue and run.
-        queue.async { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { block() } }
+    private func pollQuiescent(_ block: @escaping () -> Void) {
+        if outstandingNetworkOps == 0 && !flushing {
+            DispatchQueue.main.async(execute: block)
+        } else {
+            queue.asyncAfter(deadline: .now() + 0.005) { self.pollQuiescent(block) }
+        }
     }
     #endif
 }

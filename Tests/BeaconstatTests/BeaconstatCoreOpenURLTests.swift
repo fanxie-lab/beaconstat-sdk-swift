@@ -46,14 +46,18 @@ final class BeaconstatCoreOpenURLTests: XCTestCase {
 
     func testCustomSchemeIsUrlScheme() {
         let c = makeCore()
-        c.trackOpenURL(URL(string: "myapp://open/item/42")!)
+        // NOTE: the path marker is deliberately non-hex ("zzyzx", not e.g. "42") so
+        // it can never coincidentally match a substring of the random session-id
+        // UUID (hex digits 0-9a-f only) also present in the sent body — a purely
+        // numeric/hex marker here caused an intermittent false failure.
+        c.trackOpenURL(URL(string: "myapp://open/item/zzyzx")!)
         c.flush()
         let done = expectation(description: "flow"); c.onQuiescent { done.fulfill() }
         wait(for: [done], timeout: 3)
         let body = sentBodies()
         XCTAssertTrue(body.contains("url_scheme"))
         XCTAssertTrue(body.contains("myapp"))
-        XCTAssertFalse(body.contains("42"))
+        XCTAssertFalse(body.contains("zzyzx"))
     }
 
     func testOpenActivityWithNilURL() {
