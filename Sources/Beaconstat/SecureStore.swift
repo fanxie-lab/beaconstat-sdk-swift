@@ -86,4 +86,26 @@ final class KeychainSecureStore: SecureStore {
         add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
+
+    /// Best-effort check that the Keychain is usable in this process (an unsigned
+    /// SwiftPM test bundle, or a misconfigured entitlement, returns false).
+    static func probeAvailability(service: String = "com.beaconstat.sdk.probe") -> Bool {
+        let store = KeychainSecureStore(service: service)
+        let ok = store.write("1", forKey: .installId)
+        store.set(nil, forKey: .installId) // clean up the sentinel
+        return ok
+    }
+}
+
+/// Routes to `primary` when available, else a `fallback` (in-memory, degraded).
+/// The choice is made once at construction.
+final class FallbackSecureStore: SecureStore {
+    private let store: SecureStore
+
+    init(primary: SecureStore, isPrimaryAvailable: () -> Bool, fallback: () -> SecureStore) {
+        store = isPrimaryAvailable() ? primary : fallback()
+    }
+
+    func string(forKey key: SecureStoreKey) -> String? { store.string(forKey: key) }
+    func set(_ value: String?, forKey key: SecureStoreKey) { store.set(value, forKey: key) }
 }

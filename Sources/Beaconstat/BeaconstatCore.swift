@@ -29,7 +29,10 @@ final class BeaconstatCore {
     private var reachability: Reachability?
     private let reachabilityFactory: (DispatchQueue) -> Reachability?
 
-    init(store: SecureStore = KeychainSecureStore(),
+    init(store: SecureStore = FallbackSecureStore(
+             primary: KeychainSecureStore(),
+             isPrimaryAvailable: { KeychainSecureStore.probeAvailability() },
+             fallback: { InMemorySecureStore() }),
          clock: Clock = SystemClock(),
          sessionProvider: @escaping (Configuration) -> URLSession = { _ in URLSession(configuration: .default) },
          bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "unknown",
@@ -200,6 +203,7 @@ final class BeaconstatCore {
             self?.queue.async {
                 guard let self else { return }
                 self.flushing = false
+                guard !self.isOptedOut else { return } // opted out mid-flight -> discard this batch
                 switch result {
                 case .success:
                     self.retryCount = 0
@@ -282,8 +286,24 @@ final class BeaconstatCore {
         }
     }
 
-    func optOut() { queue.async { self.store.set("1", forKey: .optedOut) } }
-    func optIn() { queue.async { self.store.set(nil, forKey: .optedOut) } }
+    func optOut() {
+        queue.async {
+            self.store.set("1", forKey: .optedOut)
+            self.queue_?.clear()
+            self.flushTimer?.cancel(); self.flushTimer = nil
+            self.retryTimer?.cancel(); self.retryTimer = nil
+            self.logger.debug("opted out — purged queue, cancelled timers")
+        }
+    }
+
+    func optIn() {
+        queue.async {
+            self.store.set(nil, forKey: .optedOut)
+            if let interval = self.configuration?.options.flushInterval {
+                self.startFlushTimer(interval: interval) // resume periodic flush
+            }
+        }
+    }
     var isOptedOut: Bool { store.string(forKey: .optedOut) != nil }
 
     // MARK: - Test hook

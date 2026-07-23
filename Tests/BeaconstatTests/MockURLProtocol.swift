@@ -13,8 +13,30 @@ final class MockURLProtocol: URLProtocol {
     static var capturedRequests: [URLRequest] = []
     static var capturedBodies: [Data] = []
 
+    /// When true, the response to any `/events` request is held back after it's
+    /// captured — until `releaseHeldEventsRequest()` is called — so tests can
+    /// interleave work (e.g. `optOut()`) between "request received" and
+    /// "response delivered" to reproduce in-flight-flush races deterministically.
+    static var holdEventsUntilReleased = false
+    private static var releaseSemaphore = DispatchSemaphore(value: 0)
+    private static var receivedSemaphore = DispatchSemaphore(value: 0)
+
     static func reset() {
         handler = nil; capturedRequests = []; capturedBodies = []
+        holdEventsUntilReleased = false
+        releaseSemaphore = DispatchSemaphore(value: 0)
+        receivedSemaphore = DispatchSemaphore(value: 0)
+    }
+
+    /// Blocks (with a timeout) until a held `/events` request has been captured
+    /// and is parked waiting on `releaseHeldEventsRequest()`.
+    static func waitForHeldEventsRequest(timeout: TimeInterval = 2) {
+        _ = receivedSemaphore.wait(timeout: .now() + timeout)
+    }
+
+    /// Lets a request parked by `holdEventsUntilReleased` proceed to its stubbed response.
+    static func releaseHeldEventsRequest() {
+        releaseSemaphore.signal()
     }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
@@ -28,6 +50,10 @@ final class MockURLProtocol: URLProtocol {
             MockURLProtocol.capturedBodies.append(body)
         } else {
             MockURLProtocol.capturedBodies.append(Data())
+        }
+        if MockURLProtocol.holdEventsUntilReleased, request.url!.path.hasSuffix("/events") {
+            MockURLProtocol.receivedSemaphore.signal()
+            _ = MockURLProtocol.releaseSemaphore.wait(timeout: .now() + 5)
         }
         guard let stub = MockURLProtocol.handler?(request) else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse)); return
