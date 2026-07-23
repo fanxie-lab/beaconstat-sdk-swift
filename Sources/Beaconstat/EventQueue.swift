@@ -37,4 +37,34 @@ final class EventQueue {
         events.removeFirst(Swift.min(n, events.count))
         store.save(events)
     }
+
+    /// Removes AND returns up to `min(max, 100, count)` events from the front.
+    /// Used by the flush "checkout" model so an in-flight batch can't be shifted
+    /// by concurrent overflow eviction.
+    func dequeueBatch(max: Int) -> [Event] {
+        let n = Swift.min(Swift.min(Swift.max(0, max), 100), events.count)
+        guard n > 0 else { return [] }
+        let batch = Array(events.prefix(n))
+        events.removeFirst(n)
+        store.save(events)
+        return batch
+    }
+
+    /// Re-inserts a checked-out batch at the front (on retryable failure),
+    /// enforcing the cap by dropping oldest.
+    func prepend(_ batch: [Event]) {
+        guard !batch.isEmpty else { return }
+        events.insert(contentsOf: batch, at: 0)
+        if events.count > maxQueued {
+            let overflow = events.count - maxQueued
+            events.removeFirst(overflow)
+            logger.debug("queue full on requeue — dropped \(overflow) oldest event(s)")
+        }
+        store.save(events)
+    }
+
+    func clear() {
+        events.removeAll()
+        store.save(events)
+    }
 }

@@ -168,7 +168,7 @@ final class BeaconstatCore {
         guard !flushing, !stoppedForAuth, !isOptedOut,
               let config = configuration, let transport = transport, let siteToken = siteToken,
               let queue_ = queue_ else { return }
-        let batch = queue_.peekBatch(max: 100)
+        let batch = queue_.dequeueBatch(max: 100)
         guard !batch.isEmpty else { return }
         let body = EventBatch(productVersion: config.options.productVersionOrDefault,
                               environment: environment, events: batch)
@@ -184,15 +184,17 @@ final class BeaconstatCore {
                 self.flushing = false
                 switch result {
                 case .success:
-                    self.queue_?.removeFirst(batch.count)
+                    break // batch already removed; nothing to requeue
                 case .failure(.badRequest):
                     self.logger.debug("batch rejected (400) — dropping poison batch")
-                    self.queue_?.removeFirst(batch.count)
+                    // batch already removed; drop it (client validation prevents most 400s)
                 case .failure(.unauthorized):
-                    self.logger.debug("unauthorized — halting sends until reconfigured")
+                    self.logger.debug("unauthorized — requeueing and halting until reconfigured")
+                    self.queue_?.prepend(batch)
                     self.stoppedForAuth = true
                 case .failure(let e):
-                    self.logger.debug("flush failed (\(e)) — keeping events for retry")
+                    self.logger.debug("flush failed (\(e)) — requeueing for retry")
+                    self.queue_?.prepend(batch)
                 }
             }
         }
