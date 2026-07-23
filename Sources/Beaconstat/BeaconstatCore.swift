@@ -23,6 +23,7 @@ final class BeaconstatCore {
     private var flushTimer: DispatchSourceTimer?
     private var flushing = false
     private var stoppedForAuth = false
+    private var sessionManager: SessionManager?
 
     init(store: SecureStore = KeychainSecureStore(),
          clock: Clock = SystemClock(),
@@ -52,6 +53,11 @@ final class BeaconstatCore {
                    environment: [String: String]) {
         queue.async {
             do {
+                guard self.store.string(forKey: .optedOut) == nil else {
+                    self.logger = Logger(enabled: options.debugLogging || Self.isDebugBuild)
+                    self.logger.debug("opted out — collecting/sending nothing")
+                    return
+                }
                 let config = try Configuration(publicKey: publicKey, hmacSecret: hmacSecret, options: options)
                 self.configuration = config
                 self.environment = environment
@@ -63,6 +69,8 @@ final class BeaconstatCore {
                                            baseURL: config.baseURL, logger: self.logger)
                 self.queue_ = EventQueue(store: FileEventStore(fileURL: self.queueFileURL),
                                          maxQueued: options.maxQueuedEvents, logger: self.logger)
+                self.sessionManager = SessionManager(store: self.store, clock: self.clock,
+                                                     timeout: options.sessionTimeout)
                 self.startFlushTimer(interval: options.flushInterval)
                 self.performHandshakeAndInstall()
             } catch {
@@ -88,7 +96,7 @@ final class BeaconstatCore {
                     self.siteToken = resp.siteToken
                     self.store.set(resp.siteToken, forKey: .siteToken)
                     self.clock.applyServerTime(resp.serverTime)
-                    self.emitInstallDetectedIfNeeded()
+                    self.startSessionThenInstall()
                 case .failure(let error):
                     self.logger.debug("handshake failed: \(error)")
                 }
@@ -96,11 +104,31 @@ final class BeaconstatCore {
         }
     }
 
+    private func startSessionThenInstall() {
+        startSessionIfNeeded()
+        emitInstallDetectedIfNeeded()
+    }
+
+    /// Starts a new session if needed (emitting `_bcs.session_started`), and
+    /// returns the current session id (existing or newly-started).
+    @discardableResult
+    private func startSessionIfNeeded() -> String? {
+        guard let sessionManager else { return nil }
+        if let start = sessionManager.startIfNeeded() {
+            var props: [String: String] = ["_bcs.session.id": start.id]
+            if start.isFirst { props["_bcs.is_first_session"] = "true" }
+            if let prev = start.previousAt { props["_bcs.previous_session_at"] = prev }
+            enqueue(Event(name: "_bcs.session_started", time: clock.nowISO8601(), properties: props))
+        }
+        return sessionManager.currentSessionId()
+    }
+
     private func emitInstallDetectedIfNeeded() {
         guard store.string(forKey: .hasEmittedInstall) == nil else { return }
         store.set("1", forKey: .hasEmittedInstall)
-        let event = Event(name: "_bcs.install_detected", time: clock.nowISO8601(),
-                          properties: ["_bcs.install.source": "app_store"])
+        var props: [String: String] = ["_bcs.install.source": "app_store"]
+        if let sid = sessionManager?.currentSessionId() { props["_bcs.session.id"] = sid }
+        let event = Event(name: "_bcs.install_detected", time: clock.nowISO8601(), properties: props)
         enqueue(event)
         // The install event is high-value and time-sensitive: don't wait for
         // batchSize or the periodic timer — attempt to send it right away.
@@ -181,9 +209,26 @@ final class BeaconstatCore {
         #endif
     }
 
-    // MARK: - Facade stubs (real bodies land in Task 11)
+    // MARK: - Public tracking (M5)
 
-    func track(_ name: String, properties: [String: String]) { /* Task 11 */ }
+    func track(_ name: String, properties: [String: String]) {
+        queue.async {
+            guard !self.isOptedOut, self.configuration != nil else { return }
+            guard EventValidation.isValidUserEventName(name) else {
+                self.logger.debug("dropping invalid event name: \(name)"); return
+            }
+            var clean: [String: String] = [:]
+            for (k, v) in properties {
+                if EventValidation.isValidUserKey(k) { clean[k] = v }
+                else { self.logger.debug("dropping invalid property key: \(k)") }
+            }
+            let sid = self.startSessionIfNeeded()
+            if let sid { clean["_bcs.session.id"] = sid }
+            self.enqueue(Event(name: name, time: self.clock.nowISO8601(),
+                               properties: clean.isEmpty ? nil : clean))
+        }
+    }
+
     func optOut() { queue.async { self.store.set("1", forKey: .optedOut) } }
     func optIn() { queue.async { self.store.set(nil, forKey: .optedOut) } }
     var isOptedOut: Bool { store.string(forKey: .optedOut) != nil }

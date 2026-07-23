@@ -45,8 +45,11 @@ final class BeaconstatCoreFlushTests: XCTestCase {
         let core = configuredCore(queueFile: file)
         let done = expectation(description: "flow"); core.onQuiescent { done.fulfill() }
         wait(for: [done], timeout: 3)
-        // 5xx → event retained for retry.
-        XCTAssertEqual(FileEventStore(fileURL: file).load().map(\.name), ["_bcs.install_detected"])
+        // 5xx → events retained for retry. As of M5, a session starts right
+        // after handshake succeeds, before install_detected — both are
+        // queued and neither has been acked yet.
+        XCTAssertEqual(FileEventStore(fileURL: file).load().map(\.name),
+                       ["_bcs.session_started", "_bcs.install_detected"])
     }
 
     func testPoisonBatchDroppedOn400() {
