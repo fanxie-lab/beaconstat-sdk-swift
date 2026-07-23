@@ -30,4 +30,24 @@ final class BeaconstatCoreCheckoutTests: XCTestCase {
         // Events survived the failed send (re-prepended to disk).
         XCTAssertFalse(FileEventStore(fileURL: file).load().isEmpty)
     }
+
+    // After a 5xx that requeues, a success on the next attempt drains the queue.
+    func testDrainsRemainingAfterSuccess() {
+        var calls = 0
+        MockURLProtocol.handler = { req in
+            if req.url!.path.hasSuffix("/handshake") {
+                return .init(statusCode: 200, data: Data(#"{"siteToken":"bcs_tok_z","serverTime":"2026-04-19T10:30:00.000Z"}"#.utf8))
+            }
+            calls += 1
+            return .init(statusCode: 202) // events endpoint always succeeds
+        }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("q-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let c = core(file: file)
+        var o = BeaconstatOptions(); o.flushInterval = 3600; o.batchSize = 1
+        c.configure(publicKey: "bcs_pub_abcdef0123456789", hmacSecret: validHmac, options: o, environment: ["device.platform": "ios"])
+        let done = expectation(description: "flow"); c.onQuiescent { done.fulfill() }
+        wait(for: [done], timeout: 3)
+        XCTAssertTrue(FileEventStore(fileURL: file).load().isEmpty) // fully drained
+    }
 }

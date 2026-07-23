@@ -23,6 +23,8 @@ final class BeaconstatCore {
     private var flushTimer: DispatchSourceTimer?
     private var flushing = false
     private var stoppedForAuth = false
+    private var retryCount = 0
+    private var retryTimer: DispatchSourceTimer?
     private var sessionManager: SessionManager?
 
     init(store: SecureStore = KeychainSecureStore(),
@@ -184,10 +186,13 @@ final class BeaconstatCore {
                 self.flushing = false
                 switch result {
                 case .success:
-                    break // batch already removed; nothing to requeue
+                    self.retryCount = 0
+                    self.retryTimer?.cancel(); self.retryTimer = nil
+                    if let count = self.queue_?.count, count > 0 { self.flushInternal() } // drain
                 case .failure(.badRequest):
                     self.logger.debug("batch rejected (400) — dropping poison batch")
-                    // batch already removed; drop it (client validation prevents most 400s)
+                    self.retryCount = 0
+                    if let count = self.queue_?.count, count > 0 { self.flushInternal() }
                 case .failure(.unauthorized):
                     self.logger.debug("unauthorized — requeueing and halting until reconfigured")
                     self.queue_?.prepend(batch)
@@ -195,9 +200,25 @@ final class BeaconstatCore {
                 case .failure(let e):
                     self.logger.debug("flush failed (\(e)) — requeueing for retry")
                     self.queue_?.prepend(batch)
+                    self.scheduleRetry()
                 }
             }
         }
+    }
+
+    private func scheduleRetry() {
+        guard let maxRetries = configuration?.options.maxRetries else { return }
+        retryCount += 1
+        guard let delay = RetryPolicy.delay(forAttempt: retryCount, maxRetries: maxRetries) else {
+            retryCount = 0 // give up this round; periodic timer / next event / reconnect will retry
+            return
+        }
+        retryTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + delay)
+        timer.setEventHandler { [weak self] in self?.flushInternal() }
+        timer.resume()
+        retryTimer = timer
     }
 
     // MARK: - Run context
