@@ -26,19 +26,29 @@ final class BeaconstatCore {
     private var retryCount = 0
     private var retryTimer: DispatchSourceTimer?
     private var sessionManager: SessionManager?
+    private var reachability: Reachability?
+    private let reachabilityFactory: (DispatchQueue) -> Reachability?
 
     init(store: SecureStore = KeychainSecureStore(),
          clock: Clock = SystemClock(),
          sessionProvider: @escaping (Configuration) -> URLSession = { _ in URLSession(configuration: .default) },
          bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "unknown",
          sdkVersion: String = BeaconstatVersion.current,
-         queueFileURL: URL = BeaconstatCore.defaultQueueFileURL()) {
+         queueFileURL: URL = BeaconstatCore.defaultQueueFileURL(),
+         reachabilityFactory: @escaping (DispatchQueue) -> Reachability? = { queue in
+             #if canImport(Network)
+             return NWPathReachability(queue: queue)
+             #else
+             return nil
+             #endif
+         }) {
         self.store = store
         self.clock = clock
         self.sessionProvider = sessionProvider
         self.bundleIdentifier = bundleIdentifier
         self.sdkVersion = sdkVersion
         self.queueFileURL = queueFileURL
+        self.reachabilityFactory = reachabilityFactory
     }
 
     /// Default on-disk location for the persisted event queue.
@@ -80,6 +90,12 @@ final class BeaconstatCore {
                                                          timeout: options.sessionTimeout)
                 }
                 self.startFlushTimer(interval: options.flushInterval)
+                if self.reachability == nil {
+                    let r = self.reachabilityFactory(self.queue)
+                    r?.onReconnect = { [weak self] in self?.queue.async { self?.flushInternal() } }
+                    r?.start()
+                    self.reachability = r
+                }
                 self.performHandshakeAndInstall()
             } catch {
                 self.logger.debug("configure rejected: \(error)")
