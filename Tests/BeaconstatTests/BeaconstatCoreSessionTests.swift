@@ -67,6 +67,80 @@ final class BeaconstatCoreSessionTests: XCTestCase {
         XCTAssertTrue(all.contains("_bcs.session.id"))
     }
 
+    func testOversizedPropertyValueIsDropped() {
+        MockURLProtocol.handler = { req in
+            req.url!.path.hasSuffix("/handshake")
+                ? .init(statusCode: 200, data: Data(#"{"siteToken":"bcs_tok_z","serverTime":"2026-04-19T10:30:00.000Z"}"#.utf8))
+                : .init(statusCode: 202)
+        }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("q-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let c = core(file: file)
+        var opts = BeaconstatOptions(); opts.flushInterval = 3600
+        c.configure(publicKey: "bcs_pub_abcdef0123456789", hmacSecret: validHmac,
+                    options: opts, environment: ["device.platform": "ios"])
+        let oversized = String(repeating: "x", count: 2000)
+        c.track("feature_used", properties: ["ok": "v", "big": oversized])
+        c.flush()
+        let done = expectation(description: "flow"); c.onQuiescent { done.fulfill() }
+        wait(for: [done], timeout: 3)
+        let all = sentEventBodies().joined()
+        XCTAssertTrue(all.contains("feature_used"))
+        XCTAssertTrue(all.contains("\"ok\""))
+        XCTAssertFalse(all.contains(oversized))
+    }
+
+    func testInstallEventOmitsInstallSource() {
+        MockURLProtocol.handler = { req in
+            req.url!.path.hasSuffix("/handshake")
+                ? .init(statusCode: 200, data: Data(#"{"siteToken":"bcs_tok_z","serverTime":"2026-04-19T10:30:00.000Z"}"#.utf8))
+                : .init(statusCode: 202)
+        }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("q-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let c = core(file: file)
+        var opts = BeaconstatOptions(); opts.flushInterval = 3600
+        c.configure(publicKey: "bcs_pub_abcdef0123456789", hmacSecret: validHmac,
+                    options: opts, environment: ["device.platform": "ios"])
+        let done = expectation(description: "flow"); c.onQuiescent { done.fulfill() }
+        wait(for: [done], timeout: 3)
+        let all = sentEventBodies().joined()
+        XCTAssertTrue(all.contains("_bcs.install_detected"))
+        XCTAssertTrue(all.contains("_bcs.session.id"))
+        XCTAssertFalse(all.contains("install.source"))
+    }
+
+    func testPropertyCountCappedAtFifty() {
+        MockURLProtocol.handler = { req in
+            req.url!.path.hasSuffix("/handshake")
+                ? .init(statusCode: 200, data: Data(#"{"siteToken":"bcs_tok_z","serverTime":"2026-04-19T10:30:00.000Z"}"#.utf8))
+                : .init(statusCode: 202)
+        }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("q-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let c = core(file: file)
+        var opts = BeaconstatOptions(); opts.flushInterval = 3600
+        c.configure(publicKey: "bcs_pub_abcdef0123456789", hmacSecret: validHmac,
+                    options: opts, environment: ["device.platform": "ios"])
+        var props: [String: String] = [:]
+        for i in 0..<60 { props["k\(i)"] = "v\(i)" }
+        c.track("feature_used", properties: props)
+        c.flush()
+        let done = expectation(description: "flow"); c.onQuiescent { done.fulfill() }
+        wait(for: [done], timeout: 3)
+        guard let body = sentEventBodies().first(where: { $0.contains("feature_used") }),
+              let data = body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let events = json["events"] as? [[String: Any]],
+              let event = events.first(where: { ($0["name"] as? String) == "feature_used" }),
+              let eventProps = event["properties"] as? [String: Any] else {
+            XCTFail("could not locate feature_used event properties in sent body")
+            return
+        }
+        // +1 for the injected _bcs.session.id, capped at 49 user keys.
+        XCTAssertLessThanOrEqual(eventProps.count, 50)
+    }
+
     func testOptedOutSendsNothing() {
         MockURLProtocol.handler = { _ in .init(statusCode: 200) }
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("q-\(UUID()).json")

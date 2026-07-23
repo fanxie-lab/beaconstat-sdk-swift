@@ -52,25 +52,31 @@ final class BeaconstatCore {
     func configure(publicKey: String, hmacSecret: String, options: BeaconstatOptions,
                    environment: [String: String]) {
         queue.async {
+            // Build a logger up front so opt-out / bad-key diagnostics actually emit.
+            self.logger = Logger(enabled: options.debugLogging || Self.isDebugBuild)
+            guard self.store.string(forKey: .optedOut) == nil else {
+                self.logger.debug("opted out — collecting/sending nothing")
+                return
+            }
             do {
-                guard self.store.string(forKey: .optedOut) == nil else {
-                    self.logger = Logger(enabled: options.debugLogging || Self.isDebugBuild)
-                    self.logger.debug("opted out — collecting/sending nothing")
-                    return
-                }
                 let config = try Configuration(publicKey: publicKey, hmacSecret: hmacSecret, options: options)
                 self.configuration = config
                 self.environment = environment
-                let debugBuild = Self.isDebugBuild
-                self.logger = Logger(enabled: options.debugLogging || debugBuild)
+                self.stoppedForAuth = false   // reconfigure recovers from a prior 401
                 self.routesToTest = TestModeResolver.routesToTest(
-                    options.testMode, isDebug: debugBuild, isSimulator: Self.isSimulator)
+                    options.testMode, isDebug: Self.isDebugBuild, isSimulator: Self.isSimulator)
                 self.transport = Transport(session: self.sessionProvider(config),
                                            baseURL: config.baseURL, logger: self.logger)
-                self.queue_ = EventQueue(store: FileEventStore(fileURL: self.queueFileURL),
-                                         maxQueued: options.maxQueuedEvents, logger: self.logger)
-                self.sessionManager = SessionManager(store: self.store, clock: self.clock,
-                                                     timeout: options.sessionTimeout)
+                // Reuse existing queue/session on reconfigure so an in-flight flush
+                // completion never operates on a replaced queue (same file path).
+                if self.queue_ == nil {
+                    self.queue_ = EventQueue(store: FileEventStore(fileURL: self.queueFileURL),
+                                             maxQueued: options.maxQueuedEvents, logger: self.logger)
+                }
+                if self.sessionManager == nil {
+                    self.sessionManager = SessionManager(store: self.store, clock: self.clock,
+                                                         timeout: options.sessionTimeout)
+                }
                 self.startFlushTimer(interval: options.flushInterval)
                 self.performHandshakeAndInstall()
             } catch {
@@ -126,9 +132,9 @@ final class BeaconstatCore {
     private func emitInstallDetectedIfNeeded() {
         guard store.string(forKey: .hasEmittedInstall) == nil else { return }
         store.set("1", forKey: .hasEmittedInstall)
-        var props: [String: String] = ["_bcs.install.source": "app_store"]
+        var props: [String: String] = [:]
         if let sid = sessionManager?.currentSessionId() { props["_bcs.session.id"] = sid }
-        let event = Event(name: "_bcs.install_detected", time: clock.nowISO8601(), properties: props)
+        let event = Event(name: "_bcs.install_detected", time: clock.nowISO8601(), properties: props.isEmpty ? nil : props)
         enqueue(event)
         // The install event is high-value and time-sensitive: don't wait for
         // batchSize or the periodic timer — attempt to send it right away.
@@ -219,8 +225,16 @@ final class BeaconstatCore {
             }
             var clean: [String: String] = [:]
             for (k, v) in properties {
-                if EventValidation.isValidUserKey(k) { clean[k] = v }
-                else { self.logger.debug("dropping invalid property key: \(k)") }
+                guard EventValidation.isValidUserKey(k) else {
+                    self.logger.debug("dropping invalid property key: \(k)"); continue
+                }
+                guard v.count <= 1024 else {
+                    self.logger.debug("dropping oversized property value for key: \(k)"); continue
+                }
+                guard clean.count < 49 else { // leave room for _bcs.session.id (server caps 50 keys/event)
+                    self.logger.debug("property count limit reached — dropping key: \(k)"); continue
+                }
+                clean[k] = v
             }
             let sid = self.startSessionIfNeeded()
             if let sid { clean["_bcs.session.id"] = sid }
@@ -235,6 +249,7 @@ final class BeaconstatCore {
 
     // MARK: - Test hook
 
+    #if DEBUG
     /// Fires `block` once the serial queue has drained the currently-enqueued
     /// work (including the async completion re-hops). Test-only convenience.
     func onQuiescent(_ block: @escaping () -> Void) {
@@ -244,4 +259,5 @@ final class BeaconstatCore {
         // Two more hops let handshake completion + follow-up send enqueue and run.
         queue.async { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { block() } }
     }
+    #endif
 }
