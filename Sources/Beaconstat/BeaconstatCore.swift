@@ -338,6 +338,38 @@ final class BeaconstatCore {
         }
     }
 
+    // MARK: - Apple entry-point events (M6)
+
+    func trackOpenURL(_ url: URL) {
+        queue.async {
+            guard !self.isOptedOut, self.configuration != nil else { return }
+            let scheme = url.scheme?.lowercased()
+            let entryType = (scheme == "http" || scheme == "https") ? "universal_link" : "url_scheme"
+            var props: [String: String] = ["_bcs.apple.entry_type": entryType]
+            if let scheme { props["_bcs.apple.url_scheme"] = scheme }
+            if let host = url.host?.lowercased() { props["_bcs.apple.url_host"] = host }
+            // NEVER include path / query / fragment.
+            self.emitAppleEntry(name: "_bcs.apple.opened_from_url", props: props)
+        }
+    }
+
+    func trackOpenActivity(_ webpageURL: URL?) {
+        queue.async {
+            guard !self.isOptedOut, self.configuration != nil else { return }
+            var props: [String: String] = ["_bcs.apple.entry_type": "activity"]
+            if let scheme = webpageURL?.scheme?.lowercased() { props["_bcs.apple.url_scheme"] = scheme }
+            if let host = webpageURL?.host?.lowercased() { props["_bcs.apple.url_host"] = host }
+            self.emitAppleEntry(name: "_bcs.apple.opened_from_url", props: props)
+        }
+    }
+
+    /// Shared tail for Apple entry-point events: ensure a session, tag it, enqueue.
+    private func emitAppleEntry(name: String, props: [String: String]) {
+        var props = props
+        if let sid = startSessionIfNeeded() { props["_bcs.session.id"] = sid }
+        enqueue(Event(name: name, time: clock.nowISO8601(), properties: props))
+    }
+
     func optOut() {
         queue.async {
             self.store.set("1", forKey: .optedOut)

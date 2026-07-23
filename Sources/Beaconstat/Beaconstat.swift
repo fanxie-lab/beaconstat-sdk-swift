@@ -40,4 +40,13 @@ public enum Beaconstat {
     public static func optIn() { BeaconstatCore.shared.optIn() }
 
     public static var isOptedOut: Bool { BeaconstatCore.shared.isOptedOut }
+
+    /// Report a URL entry point (custom scheme or universal link). Only the
+    /// scheme + host are recorded — never the path, query, or fragment.
+    public static func opened(from url: URL) { BeaconstatCore.shared.trackOpenURL(url) }
+
+    /// Report an `NSUserActivity` continuation (Handoff / universal link activity).
+    public static func openedFromActivity(webpageURL: URL?) {
+        BeaconstatCore.shared.trackOpenActivity(webpageURL)
+    }
 }
