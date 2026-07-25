@@ -398,6 +398,27 @@ final class BeaconstatCore {
         }
     }
 
+    func trackPushReceived(category: String?, wasSilent: Bool) {
+        queue.async {
+            guard !self.isOptedOut, self.configuration != nil else { return }
+            var props: [String: String] = ["_bcs.apple.push_was_silent": wasSilent ? "true" : "false"]
+            if let category { props["_bcs.apple.push_category"] = category }
+            // Only category + was_silent — NEVER the notification body/title/userInfo.
+            self.emitAppleEntry(name: "_bcs.apple.push_received", props: props)
+        }
+    }
+
+    func trackPushOpened(category: String?, actionId: String?) {
+        queue.async {
+            guard !self.isOptedOut, self.configuration != nil else { return }
+            var props: [String: String] = [:]
+            if let category { props["_bcs.apple.push_category"] = category }
+            if let actionId { props["_bcs.apple.push_action_id"] = actionId }
+            // Only category + action id — NEVER the notification body/title/userInfo.
+            self.emitAppleEntry(name: "_bcs.apple.push_opened", props: props)
+        }
+    }
+
     func optOut() {
         queue.async {
             self.store.set("1", forKey: .optedOut)

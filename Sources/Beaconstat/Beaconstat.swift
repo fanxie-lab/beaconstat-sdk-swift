@@ -57,4 +57,16 @@ public enum Beaconstat {
     public static func openedFromWidget(kind: String?, family: String?) {
         BeaconstatCore.shared.trackWidget(kind: kind, family: family)
     }
+
+    /// Report a delivered notification (opt-in). Only `category` + `wasSilent`
+    /// are recorded — never the notification body, title, or userInfo.
+    public static func pushReceived(category: String?, wasSilent: Bool) {
+        BeaconstatCore.shared.trackPushReceived(category: category, wasSilent: wasSilent)
+    }
+
+    /// Report the user opening/acting on a notification (opt-in). Only
+    /// `category` + `actionId` are recorded.
+    public static func pushOpened(category: String?, actionId: String?) {
+        BeaconstatCore.shared.trackPushOpened(category: category, actionId: actionId)
+    }
 }
