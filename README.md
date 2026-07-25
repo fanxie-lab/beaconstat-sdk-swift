@@ -58,12 +58,12 @@ The SDK automatically emits `_bcs.install_detected`, `_bcs.session_started`,
 
 `BeaconstatOptions` tunes batching (`batchSize`, `flushInterval` — 4h release / 30s DEBUG),
 `flushOnBackground`, `sessionTimeout`, `maxQueuedEvents`, `maxRetries`, `testMode`,
-`routeTestFlightToTest`, `debugLogging`, `collectAccessibility`, and `endpoint`.
+`routeTestFlightToTest`, `debugLogging`, `collectAccessibility`, `productVersion`, and `endpoint`.
 
 ## Privacy
 
 No PII by default. URL entry points record scheme + host only (never path/query/fragment).
-Push events record only category/action identifiers. Consent is developer-managed — gate
+Push events record only the notification category, action identifier, and a was-silent flag — never the body, title, or userInfo. Consent is developer-managed — gate
 `configure()` behind your own consent UI, or use `optOut()`.
 
 ## Test mode

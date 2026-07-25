@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "BeaconstatSample",
-    platforms: [.iOS(.v15), .macOS(.v13)],
+    platforms: [.iOS(.v15), .macOS(.v12)],
     dependencies: [
         .package(path: "../..")   // the Beaconstat SDK
     ],
