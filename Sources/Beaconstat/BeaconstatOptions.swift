@@ -63,6 +63,33 @@ public struct BeaconstatOptions: Sendable {
     public var collectAccessibility: Bool
     /// Override the ingest base URL (dev / self-host). Defaults to production.
     public var endpoint: URL?
+    /// Keychain access group used to share one install identity between the host
+    /// app and its extensions (M12).
+    ///
+    /// Without this, identity is scoped to the calling target's own Keychain
+    /// group, so a `UNNotificationServiceExtension` calling
+    /// `Beaconstat.pushReceived(…)` — exactly where that API belongs — resolves
+    /// to a *different* install, complete with its own `_bcs.install_detected`
+    /// and `_bcs.is_first_session=true`. Same for a widget extension calling
+    /// `openedFromWidget(…)`.
+    ///
+    /// To use it, add the **Keychain Sharing** capability with the same group to
+    /// the app target *and* every extension target, then pass the fully
+    /// qualified group here (Xcode prefixes it with your team id):
+    ///
+    /// ```swift
+    /// // App target and extension targets: keychain-access-groups entitlement
+    /// //   $(AppIdentifierPrefix)com.example.app.shared
+    /// var options = BeaconstatOptions()
+    /// options.keychainAccessGroup = "ABCDE12345.com.example.app.shared"
+    /// ```
+    ///
+    /// Existing installs migrate automatically: reads are not scoped to the
+    /// group, so an `install_id` already sitting in the app's private group is
+    /// still found and is rewritten into the shared group on the next write.
+    /// Leave `nil` — the default — and every target keeps its own identity, so
+    /// only call the SDK from the app target in that case.
+    public var keychainAccessGroup: String?
     /// The host app's version, sent on the wire as `productVersion`. The
     /// facade fills this from `CFBundleShortVersionString` when left `nil`.
     public var productVersion: String?
@@ -82,6 +109,7 @@ public struct BeaconstatOptions: Sendable {
         debugLogging: Bool = false,
         collectAccessibility: Bool = true,
         endpoint: URL? = nil,
+        keychainAccessGroup: String? = nil,
         productVersion: String? = nil,
         routeTestFlightToTest: Bool = false
     ) {
@@ -95,6 +123,7 @@ public struct BeaconstatOptions: Sendable {
         self.debugLogging = debugLogging
         self.collectAccessibility = collectAccessibility
         self.endpoint = endpoint
+        self.keychainAccessGroup = keychainAccessGroup
         self.productVersion = productVersion
         self.routeTestFlightToTest = routeTestFlightToTest
     }

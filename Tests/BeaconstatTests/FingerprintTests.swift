@@ -7,7 +7,19 @@ final class FingerprintTests: XCTestCase {
         let a = Fingerprint.installId(store: store)
         let b = Fingerprint.installId(store: store)
         XCTAssertEqual(a, b)
-        XCTAssertFalse(a.isEmpty)
+        XCTAssertFalse(a?.isEmpty ?? true)
+    }
+
+    /// H5: a store that cannot durably persist the id must yield `nil`, not an
+    /// id that changes on the next launch and reports one install as many.
+    func testInstallIdIsNilWhenItCannotBePersisted() {
+        XCTAssertNil(Fingerprint.installId(store: NonPersistingStore()))
+    }
+
+    private final class NonPersistingStore: SecureStore {
+        func string(forKey key: SecureStoreKey) -> String? { nil }
+        @discardableResult
+        func set(_ value: String?, forKey key: SecureStoreKey) -> Bool { false }
     }
 
     func testInstallIdPersistsToStore() {

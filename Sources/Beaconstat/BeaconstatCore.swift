@@ -33,11 +33,11 @@ final class BeaconstatCore {
     private let reachabilityFactory: (DispatchQueue) -> Reachability?
     private let lifecycleObserver: LifecycleObserver
     private var lifecycleStarted = false
+    private var reportedStoreDegradation = false
 
-    init(store: SecureStore = FallbackSecureStore(
+    init(store: SecureStore = LayeredSecureStore(
              primary: KeychainSecureStore(),
-             isPrimaryAvailable: { KeychainSecureStore.probeAvailability() },
-             fallback: { InMemorySecureStore() }),
+             mirror: FileSecureStore(fileURL: BeaconstatCore.defaultIdentityFileURL())),
          clock: Clock = SystemClock(),
          sessionProvider: @escaping (Configuration) -> URLSession = { _ in URLSession(configuration: .default) },
          bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "unknown",
@@ -71,10 +71,22 @@ final class BeaconstatCore {
 
     /// Default on-disk location for the persisted event queue.
     static func defaultQueueFileURL() -> URL {
-        let base = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                 appropriateFor: nil, create: true))
+        supportDirectory().appendingPathComponent("Beaconstat/queue.json")
+    }
+
+    /// Default on-disk location for the durable identity mirror (H5).
+    static func defaultIdentityFileURL() -> URL {
+        supportDirectory().appendingPathComponent("Beaconstat/identity.json")
+    }
+
+    /// `create: false` on purpose: both callers run on the main thread while
+    /// `BeaconstatCore.shared` is being built, and creating the directory there
+    /// is synchronous disk I/O before first frame (M6). `FileEventStore` and
+    /// `FileSecureStore` each create it lazily, off the main thread.
+    private static func supportDirectory() -> URL {
+        (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                      appropriateFor: nil, create: false))
             ?? FileManager.default.temporaryDirectory
-        return base.appendingPathComponent("Beaconstat/queue.json")
     }
 
     // MARK: - Public entry points (hop onto the serial queue)
@@ -103,6 +115,10 @@ final class BeaconstatCore {
                 // Everything below reads `config.options` — the CLAMPED copy —
                 // never the raw `options` the host passed in (H4).
                 let opts = config.options
+                // Before the first store access, so app and extension resolve to
+                // one identity from the very first read (M12).
+                (self.store as? KeychainAccessGroupConfigurable)?
+                    .setKeychainAccessGroup(opts.keychainAccessGroup)
                 self.routesToTest = TestModeResolver.routesToTest(
                     opts.testMode, isDebug: Self.isDebugBuild, isSimulator: Self.isSimulator,
                     isTestFlight: environment["run_context.is_testflight"] == "true",
@@ -147,7 +163,18 @@ final class BeaconstatCore {
 
     private func performHandshakeAndInstall() {
         guard let config = configuration, let transport = transport else { return }
-        let installId = Fingerprint.installId(store: store)
+        guard let installId = Fingerprint.installId(store: store) else {
+            // No durable install id: the Keychain refused the write and no
+            // on-disk mirror accepted it either. Handshaking now would register a
+            // fingerprint that changes on the next launch — one install counted
+            // many times (H5). Stay silent; the queue is durable, so a later run
+            // with working storage sends what accumulated here.
+            logger.debug("no durable install id — secure storage is unavailable; "
+                         + "skipping handshake this run rather than reporting a phantom install")
+            reportStoreDegradation()
+            return
+        }
+        reportStoreDegradation()
         let fingerprint = Fingerprint.compute(bundleIdentifier: bundleIdentifier, installId: installId)
         let environmentType = routesToTest ? "development" : "production"
         outstandingNetworkOps += 1
@@ -190,9 +217,28 @@ final class BeaconstatCore {
         return sessionManager.currentSessionId()
     }
 
+    /// Reports degraded secure storage exactly once per configure. Silent when
+    /// storage is healthy — a warning that fires on every launch gets ignored.
+    private func reportStoreDegradation() {
+        guard let reason = store.degradationDescription, !reportedStoreDegradation else { return }
+        reportedStoreDegradation = true
+        logger.debug("secure storage degraded: \(reason). "
+                     + "Check the app-sandbox / keychain-access-groups entitlement — "
+                     + "unsandboxed macOS and pre-first-unlock iOS launches are the usual causes.")
+    }
+
     private func emitInstallDetectedIfNeeded() {
         guard store.string(forKey: .hasEmittedInstall) == nil else { return }
-        store.set("1", forKey: .hasEmittedInstall)
+        // Only claim a first install if we can durably remember having claimed
+        // it. Otherwise the claim repeats on every launch — the phantom-install
+        // inflation in H5. Better to under-report one install than to invent
+        // dozens.
+        guard store.set("1", forKey: .hasEmittedInstall) else {
+            logger.debug("could not persist the install marker — skipping install_detected "
+                         + "rather than re-emitting it on every launch")
+            reportStoreDegradation()
+            return
+        }
         var props: [String: String] = [:]
         if let sid = sessionManager?.currentSessionId() { props["_bcs.session.id"] = sid }
         let event = Event(name: "_bcs.install_detected", time: clock.nowISO8601(), properties: props.isEmpty ? nil : props)
