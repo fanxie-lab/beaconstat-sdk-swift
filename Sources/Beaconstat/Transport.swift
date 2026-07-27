@@ -6,13 +6,42 @@ struct HandshakeResponse: Decodable, Equatable {
 }
 
 enum TransportError: Error, Equatable {
-    case network        // offline/timeout — retryable
-    case unauthorized   // 401 — stop sending
-    case badRequest     // 400 — drop the batch (poison)
-    case rateLimited    // 429 — back off
-    case server         // 5xx — retryable
-    case unexpected(Int)
+    case network            // offline / timeout / 408 — retryable
+    case unauthorized       // 401 — stop sending
+    case badRequest         // 400 and every other non-retryable 4xx — drop the batch
+    case payloadTooLarge    // 413 — the batch is too big; a smaller one may work
+    case rateLimited        // 429 — back off
+    case server             // 5xx — retryable
+    case unexpected(Int)    // 1xx/3xx: shouldn't happen, and is NOT retried forever
     case decoding
+}
+
+/// Maps an HTTP status onto the delivery decision.
+///
+/// Previously only 202/401/400/429/5xx were enumerated and everything else fell
+/// into `.unexpected`, which the core re-prepended to the front of the queue
+/// indefinitely — so a 403 from a proxy, a 404 from a misconfigured endpoint, a
+/// captive portal's 200, or a 413 blocked every event behind it for the life of
+/// the install (H3).
+enum HTTPStatusClassifier {
+    static func classifySend(_ status: Int) -> Result<Void, TransportError> {
+        switch status {
+        // The contract says 202. Anything else in 2xx is not what we asked for,
+        // but it is not retryable either — a captive portal's 200 HTML page
+        // would otherwise loop forever. Accept and warn.
+        case 200...299: return .success(())
+        case 401: return .failure(.unauthorized)
+        // The only two 4xx that mean "the same request may work later".
+        case 408: return .failure(.network)
+        case 429: return .failure(.rateLimited)
+        case 413: return .failure(.payloadTooLarge)
+        // Everything else in 4xx is the client's fault and resending is futile:
+        // 403 (revoked key, or a proxy), 404 (wrong endpoint), 422, 451…
+        case 400...499: return .failure(.badRequest)
+        case 500...599: return .failure(.server)
+        default: return .failure(.unexpected(status))
+        }
+    }
 }
 
 /// Thin URLSession transport. Signing/timestamps are computed by the core and
@@ -77,17 +106,14 @@ final class Transport {
         request.setValue(timestamp, forHTTPHeaderField: "x-timestamp")
         request.setValue(idempotencyKey, forHTTPHeaderField: "x-idempotency-key")
         request.httpBody = bodyData
-        session.dataTask(with: request) { _, response, error in
+        session.dataTask(with: request) { [logger] _, response, error in
             if error != nil { completion(.failure(.network)); return }
             guard let http = response as? HTTPURLResponse else { completion(.failure(.network)); return }
-            switch http.statusCode {
-            case 202: completion(.success(()))
-            case 401: completion(.failure(.unauthorized))
-            case 400: completion(.failure(.badRequest))
-            case 429: completion(.failure(.rateLimited))
-            case 500...599: completion(.failure(.server))
-            default: completion(.failure(.unexpected(http.statusCode)))
+            if (200...299).contains(http.statusCode), http.statusCode != 202 {
+                logger.debug("ingest answered \(http.statusCode) instead of 202 — treating the "
+                             + "batch as accepted; check for a captive portal or a proxy")
             }
+            completion(HTTPStatusClassifier.classifySend(http.statusCode))
         }.resume()
     }
 }

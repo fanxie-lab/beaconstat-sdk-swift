@@ -47,6 +47,11 @@ final class BeaconstatCore {
     /// queue-confined like every other piece of core state.
     private let backgroundActivity: BackgroundActivity
     private var holdingBackgroundActivity = false
+    /// Encoded-size budget for one batch (H3). Starts from
+    /// `EventQueue.defaultMaxBatchBytes` minus the environment map, which
+    /// shares the same request body, and halves on a 413 so a deployment with a
+    /// smaller body limit than ours converges instead of looping.
+    private var batchByteBudget = EventQueue.defaultMaxBatchBytes
 
     init(store: SecureStore = LayeredSecureStore(
              primary: KeychainSecureStore(),
@@ -133,6 +138,13 @@ final class BeaconstatCore {
                 for notice in config.clampNotices { self.logger.debug("options: \(notice)") }
                 self.configuration = config
                 self.environment = environment
+                // `environment` and `productVersion` ride in the same request
+                // body as the events, so the events' share of the budget is
+                // what is left after them (H3). Recomputed here so a
+                // reconfigure also resets a budget an earlier 413 had shrunk.
+                let environmentBytes = (try? JSONEncoder().encode(environment).count) ?? 0
+                self.batchByteBudget = max(EventQueue.minimumBatchBytes,
+                                           EventQueue.defaultMaxBatchBytes - environmentBytes)
                 // Read back the token persisted by an earlier successful
                 // handshake. Nothing used to read this key, so a launch with no
                 // connectivity disabled the SDK for the whole run even though
@@ -616,7 +628,7 @@ extension BeaconstatCore {
         // Select, encode and sign BEFORE committing to the batch (L2). The old
         // order dequeued first and bailed on an encode failure, silently
         // destroying the batch it had just removed from disk.
-        let batch = queue_.nextBatch(max: EventQueue.maxEventsPerBatch)
+        let batch = queue_.nextBatch(max: EventQueue.maxEventsPerBatch, maxBytes: batchByteBudget)
         guard !batch.isEmpty else { return }
         let body = EventBatch(productVersion: config.options.productVersionOrDefault,
                               environment: environment, events: batch)
@@ -651,7 +663,7 @@ extension BeaconstatCore {
                 // this on the same serial queue and already cleared the
                 // in-flight batch, so there is nothing to acknowledge.
                 guard !self.isOptedOut else { self.endBackgroundActivityIfIdle(); return }
-                self.handleFlushResult(result)
+                self.handleFlushResult(result, batchCount: batch.count)
                 self.endBackgroundActivityIfIdle()
             }
         }
@@ -660,7 +672,9 @@ extension BeaconstatCore {
     /// Runs on the serial queue, with the batch still marked in flight.
     /// Every path must either `acknowledge()` (gone for good) or `release()`
     /// (selectable again) — leaving it marked would wedge the queue.
-    private func handleFlushResult(_ result: Result<Void, TransportError>) {
+    ///
+    /// - Parameter batchCount: how many events were sent, for the 413 decision.
+    private func handleFlushResult(_ result: Result<Void, TransportError>, batchCount: Int) {
         switch result {
         case .success:
             queue_?.acknowledge()
@@ -668,10 +682,15 @@ extension BeaconstatCore {
             retryTimer?.cancel(); retryTimer = nil
             if let pending = queue_?.pendingCount, pending > 0 { flushInternal() } // drain
         case .failure(.badRequest):
-            logger.debug("batch rejected (400) — dropping poison batch")
-            queue_?.acknowledge()
-            retryCount = 0
-            if let pending = queue_?.pendingCount, pending > 0 { flushInternal() }
+            // 400, and now every other non-retryable 4xx: 403 from a proxy or a
+            // revoked key, 404 from a misconfigured endpoint, 422, 451… These
+            // used to become `.unexpected` and be retried at the head of the
+            // queue forever, blocking everything behind them (H3).
+            dropPoisonBatch(reason: "was rejected and retrying cannot help")
+        case .failure(.unexpected(let status)):
+            dropPoisonBatch(reason: "got an unexpected status (\(status))")
+        case .failure(.payloadTooLarge):
+            handlePayloadTooLarge(batchCount: batchCount)
         case .failure(.unauthorized):
             logger.debug("unauthorized — requeueing and halting until reconfigured")
             queue_?.release()
@@ -681,6 +700,35 @@ extension BeaconstatCore {
             queue_?.release()
             scheduleRetry()
         }
+    }
+
+    private func dropPoisonBatch(reason: String) {
+        logger.debug("batch \(reason) — dropping it rather than blocking every event behind it")
+        queue_?.acknowledge()
+        retryCount = 0
+        if let pending = queue_?.pendingCount, pending > 0 { flushInternal() }
+    }
+
+    /// 413 is neither poison nor plainly retryable: the same events in a
+    /// smaller batch may well be accepted, so shrink and try again rather than
+    /// throwing real data away. Converges on whatever body limit the deployment
+    /// actually has — the reference API sits behind Express's 100 KB default.
+    private func handlePayloadTooLarge(batchCount: Int) {
+        // Two ways out, and between them they GUARANTEE termination: the budget
+        // strictly halves toward a floor, and once it can shrink no further —
+        // or the batch is already a single event — the batch is dropped.
+        // Without the floor case, a server that answers 413 to everything
+        // (a misconfigured proxy) would loop on the head of the queue forever,
+        // which is the exact bug H3 is about.
+        guard batchCount > 1, batchByteBudget > EventQueue.minimumBatchBytes else {
+            dropPoisonBatch(reason: "was rejected as too large (413) and cannot be made smaller")
+            return
+        }
+        batchByteBudget = max(EventQueue.minimumBatchBytes, batchByteBudget / 2)
+        logger.debug("batch too large (413) — halving the budget to \(batchByteBudget) bytes "
+                     + "and retrying the same events in smaller pieces")
+        queue_?.release()
+        scheduleRetry()
     }
 
     private func scheduleRetry() {

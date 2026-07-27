@@ -24,6 +24,37 @@ final class EventQueue {
     /// `EventsRequestDto`), so there is no point selecting more.
     static let maxEventsPerBatch = 100
 
+    /// Default ceiling on the encoded size of one batch (H3).
+    ///
+    /// 100 events with no byte budget at all could approach ~5 MB at the
+    /// enforced property limits, and the reference ingest API runs behind
+    /// Express's default 100 KB body-parser limit — so a full batch of large
+    /// events was 413'd every single time, forever, with nothing behind it able
+    /// to send. 80 KB leaves headroom for `environment` and `productVersion`,
+    /// which share the same body; the core subtracts the environment's actual
+    /// size from this before selecting.
+    static let defaultMaxBatchBytes = 80 * 1024
+
+    /// Never shrink the adaptive budget below this, or a server answering 413
+    /// to everything would drive batches to zero events.
+    static let minimumBatchBytes = 4 * 1024
+
+    /// Absolute ceiling on ONE event, enforced at enqueue.
+    ///
+    /// Deliberately a fixed constant rather than the current adaptive batch
+    /// budget: a 413-driven shrink must never start discarding events that are
+    /// perfectly legal. 64 KB comfortably admits a maximal legitimate event
+    /// (the server allows 50 property keys at 1024 chars each ≈ 56 KB) while
+    /// refusing anything that could not fit in a default batch on its own.
+    static let maxEventBytes = 64 * 1024
+
+    /// Encoded size of one event, measured the way it is persisted (id
+    /// included). That over-estimates the default wire size by ~48 bytes per
+    /// event, which biases toward smaller batches — the safe direction.
+    private static func encodedSize(_ event: Event) -> Int {
+        (try? JSONEncoder().encode(event).count) ?? 0
+    }
+
     /// Checked out and awaiting acknowledgement. Always the logical front of
     /// the queue, and never a candidate for selection or eviction.
     private var inFlight: [Event] = []
@@ -68,6 +99,15 @@ final class EventQueue {
     // MARK: - Producing
 
     func enqueue(_ event: Event) {
+        // Refuse an event that could never fit in a batch by itself, at the
+        // door. Queueing it would park it at the front forever: it can never be
+        // sent, and nothing behind it can be selected past it (H3).
+        let size = Self.encodedSize(event)
+        guard size <= Self.maxEventBytes else {
+            logger.debug("dropping '\(event.name)': \(size) bytes is too large to ever send "
+                         + "(limit \(Self.maxEventBytes))")
+            return
+        }
         pending.append(event)
         evictIfOverCap(reason: "queue full")
         persist()
@@ -156,10 +196,31 @@ final class EventQueue {
     /// The next batch to send, **without mutating anything**, so the caller can
     /// encode and sign before committing to it (L2). Never includes an
     /// in-flight event.
-    func nextBatch(max: Int) -> [Event] {
-        let n = Swift.min(Swift.min(Swift.max(0, max), Self.maxEventsPerBatch), pending.count)
-        guard n > 0 else { return [] }
-        return Array(pending.prefix(n))
+    ///
+    /// - Parameter maxBytes: encoded-size budget for the batch (H3). Bounds the
+    ///   request so it cannot be rejected out of hand for being too big.
+    ///
+    /// Returns at least one event whenever anything is pending, even if that
+    /// event alone exceeds the budget. Returning empty instead would recreate
+    /// the very deadlock this exists to prevent: the head event could never be
+    /// selected, and nothing behind it would ever send. An over-budget event
+    /// goes out alone, and the server's answer decides its fate.
+    func nextBatch(max: Int, maxBytes: Int = EventQueue.defaultMaxBatchBytes) -> [Event] {
+        let limit = Swift.min(Swift.max(0, max), Self.maxEventsPerBatch)
+        guard limit > 0 else { return [] }
+        var selected: [Event] = []
+        var bytes = 0
+        for event in pending {
+            guard selected.count < limit else { break }
+            let size = Self.encodedSize(event)
+            // The `!selected.isEmpty` guard is what lets an over-budget head
+            // event through on its own.
+            if !selected.isEmpty, bytes + size > maxBytes { break }
+            selected.append(event)
+            bytes += size
+            if bytes >= maxBytes { break }
+        }
+        return selected
     }
 
     /// Moves the first `n` pending events into the in-flight set.
