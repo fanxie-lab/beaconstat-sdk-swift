@@ -23,7 +23,14 @@ enum SecureStoreKey: String, CaseIterable {
 }
 
 /// Abstraction over secure persistence. `set(nil, forKey:)` deletes the key.
-protocol SecureStore: AnyObject {
+///
+/// `Sendable`: a store is captured by `OptOutFlag`'s priming block and read from
+/// both the core's serial queue and (for the consent flag) the caller's thread,
+/// so conformers must be internally synchronised. Every one in this file is —
+/// each holds an `NSLock` — which is why they are `@unchecked` rather than
+/// actors: the operations are short, non-suspending, and called from code that
+/// must not await (M13).
+protocol SecureStore: AnyObject, Sendable {
     func string(forKey key: SecureStoreKey) -> String?
 
     /// Writes (or, for `nil`, deletes) a value.
@@ -49,7 +56,7 @@ extension SecureStore {
 }
 
 /// Stores that can scope their items to a shared Keychain access group (M12).
-protocol KeychainAccessGroupConfigurable: AnyObject {
+protocol KeychainAccessGroupConfigurable: AnyObject, Sendable {
     /// Scopes newly written Keychain items to `group`, so a host app and its
     /// extensions resolve to one install identity. Must match a
     /// `keychain-access-groups` entitlement shared by both targets.
@@ -58,7 +65,8 @@ protocol KeychainAccessGroupConfigurable: AnyObject {
 
 /// Thread-safe in-memory store. The last-resort tier of `LayeredSecureStore`,
 /// and the store the test suite injects.
-final class InMemorySecureStore: SecureStore {
+/// `@unchecked Sendable`: one dictionary, every access under `lock`.
+final class InMemorySecureStore: SecureStore, @unchecked Sendable {
     private var storage: [SecureStoreKey: String] = [:]
     private let lock = NSLock()
 
@@ -76,18 +84,29 @@ final class InMemorySecureStore: SecureStore {
 }
 
 /// Keychain-backed store (generic password items under one service).
-final class KeychainSecureStore: SecureStore, KeychainAccessGroupConfigurable {
+/// `@unchecked Sendable`: `accessGroup` is the only mutable member and it is
+/// read and written under `lock`; `service` and `secItem` are immutable.
+final class KeychainSecureStore: SecureStore, KeychainAccessGroupConfigurable, @unchecked Sendable {
     /// Injectable `SecItem*` seam. The real Keychain is unavailable in an
     /// unsigned SwiftPM test bundle, which is why the delete-then-add logic,
     /// the access group, and every failure path had zero executed coverage.
-    struct SecItemAPI {
-        var copyMatching: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
-        var add: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
-        var delete: (CFDictionary) -> OSStatus
+    struct SecItemAPI: Sendable {
+        // `let` + `@Sendable`, so the struct is genuinely `Sendable` and the
+        // shared `system` value needs no escape hatch. They were `var`s, which
+        // nothing assigned to.
+        let copyMatching: @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
+        let add: @Sendable (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
+        let delete: @Sendable (CFDictionary) -> OSStatus
 
-        static let system = SecItemAPI(copyMatching: SecItemCopyMatching,
-                                       add: SecItemAdd,
-                                       delete: SecItemDelete)
+        /// Wrapped in explicit closures rather than passing the C functions
+        /// directly: an imported C function reference is not a `@Sendable`
+        /// function value, so `copyMatching: SecItemCopyMatching` warns under
+        /// `-strict-concurrency=complete` even though `SecItem*` is thread-safe
+        /// by contract.
+        static let system = SecItemAPI(
+            copyMatching: { query, result in SecItemCopyMatching(query, result) },
+            add: { attributes, result in SecItemAdd(attributes, result) },
+            delete: { query in SecItemDelete(query) })
     }
 
     private let service: String
@@ -174,7 +193,9 @@ final class KeychainSecureStore: SecureStore, KeychainAccessGroupConfigurable {
 /// Never holds `siteToken` (see `SecureStoreKey.isMirrorable`). Writes are
 /// atomic; a missing or corrupt file reads as empty. No I/O in `init` — this is
 /// constructed on the main thread during app launch (M6).
-final class FileSecureStore: SecureStore {
+/// `@unchecked Sendable`: `cache` is the only mutable member and every path
+/// that touches it holds `lock` for the whole operation, including the file I/O.
+final class FileSecureStore: SecureStore, @unchecked Sendable {
     private let fileURL: URL
     private let lock = NSLock()
     private var cache: [String: String]?
@@ -233,7 +254,10 @@ final class FileSecureStore: SecureStore {
 ///
 /// A read that misses `primary` but hits `mirror` back-fills `primary`, so the
 /// Keychain becomes the source of truth again as soon as it can be.
-final class LayeredSecureStore: SecureStore, KeychainAccessGroupConfigurable {
+/// `@unchecked Sendable`: the two mutable members, `untrustedPrimaryKeys` and
+/// `degradation`, are only ever touched through the private accessors below,
+/// each of which takes `lock`. The three tiers are themselves `Sendable`.
+final class LayeredSecureStore: SecureStore, KeychainAccessGroupConfigurable, @unchecked Sendable {
     private let primary: SecureStore
     private let mirror: SecureStore?
     private let volatile: SecureStore

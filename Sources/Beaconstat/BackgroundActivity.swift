@@ -11,14 +11,14 @@ import Foundation
 /// the queue's mark-in-flight/delete-on-ack model, which replays an
 /// unacknowledged batch after termination. Treat this as an optimisation that
 /// buys the *current* attempt a chance to land.
-protocol BackgroundActivity: AnyObject {
+protocol BackgroundActivity: AnyObject, Sendable {
     /// Takes an assertion. Idempotent: a second call while one is held does
     /// nothing. `expiration` fires if the OS reclaims the time before `end()`.
     ///
     /// Safe to call from any thread — the core takes the assertion on the
     /// notification thread, before hopping onto its serial queue, because the
     /// OS clock starts at the notification and the hop is pure latency.
-    func begin(expiration: @escaping () -> Void)
+    func begin(expiration: @escaping @Sendable () -> Void)
     /// Releases the assertion. Idempotent.
     func end()
 }
@@ -26,7 +26,7 @@ protocol BackgroundActivity: AnyObject {
 /// No-op for platforms that don't suspend apps this way (macOS) and for any
 /// build where the API isn't available.
 final class NoBackgroundActivity: BackgroundActivity {
-    func begin(expiration: @escaping () -> Void) {}
+    func begin(expiration: @escaping @Sendable () -> Void) {}
     func end() {}
 }
 
@@ -45,7 +45,12 @@ final class NoBackgroundActivity: BackgroundActivity {
 ///
 /// The system holds the process while the supplied block is executing, so the
 /// block parks on a semaphore until `end()` signals it.
-final class ExpiringBackgroundActivity: BackgroundActivity {
+/// `@unchecked Sendable`: `held` and `release` are the mutable members and both
+/// are read and written under `lock`. It has to be safe from any thread — the
+/// core takes the assertion on the notification-delivery thread, before hopping
+/// onto its serial queue, precisely because the OS suspension clock starts at
+/// the notification (H2).
+final class ExpiringBackgroundActivity: BackgroundActivity, @unchecked Sendable {
     private let reason: String
     /// Backstop so a lost `end()` can't park a system thread indefinitely. The
     /// OS budget is shorter than this in practice; whichever fires first wins.
@@ -59,7 +64,7 @@ final class ExpiringBackgroundActivity: BackgroundActivity {
         self.maximumHold = maximumHold
     }
 
-    func begin(expiration: @escaping () -> Void) {
+    func begin(expiration: @escaping @Sendable () -> Void) {
         lock.lock()
         guard !held else { lock.unlock(); return }
         held = true

@@ -316,9 +316,16 @@ struct EnvironmentCollector {
         #endif
         var size = 0
         guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return nil }
-        var buffer = [CChar](repeating: 0, count: size)
+        var buffer = [UInt8](repeating: 0, count: size)
         guard sysctlbyname(name, &buffer, &size, nil, 0) == 0 else { return nil }
-        return String(cString: buffer)
+        // `String(cString:)` on an array is deprecated (it was the last warning
+        // in a Swift 6 build, M13). Truncating at the NUL ourselves is also
+        // strictly safer: the deprecated initialiser reads to the first NUL and
+        // trusts one to exist, whereas `sysctlbyname` reports the buffer length,
+        // and a value that exactly filled it would have no terminator.
+        let bytes = buffer.prefix { $0 != 0 }
+        guard !bytes.isEmpty else { return nil }
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     struct ScreenMetrics { let width: Int; let height: Int; let scale: Int; let orientation: String? }

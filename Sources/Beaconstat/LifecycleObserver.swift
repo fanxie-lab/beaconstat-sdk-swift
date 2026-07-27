@@ -35,22 +35,42 @@ import WatchKit
 /// queue, and the process may exit before that block runs. It costs nothing to
 /// try, and Wave 2's mark-in-flight/delete-on-ack queue means an interrupted
 /// flush replays rather than loses.
-final class LifecycleObserver {
+/// `@unchecked Sendable`: `tokens` and the three callbacks are mutable, and all
+/// six accesses take `lock`. A lock rather than queue confinement because the
+/// callbacks are *assigned* from the core's serial queue but *invoked* from
+/// whichever thread `NotificationCenter` delivers on.
+final class LifecycleObserver: @unchecked Sendable {
+    private let lock = NSLock()
     /// The app has actually left the foreground. The core emits
     /// `_bcs.apple.app_backgrounded` and (by default) flushes.
-    var onBackground: (() -> Void)?
+    var onBackground: (@Sendable () -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return _onBackground }
+        set { lock.lock(); _onBackground = newValue; lock.unlock() }
+    }
+    private var _onBackground: (@Sendable () -> Void)?
     /// The app merely lost focus — macOS only. The core flushes and emits
     /// nothing.
-    var onResignActive: (() -> Void)?
+    var onResignActive: (@Sendable () -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return _onResignActive }
+        set { lock.lock(); _onResignActive = newValue; lock.unlock() }
+    }
+    private var _onResignActive: (@Sendable () -> Void)?
     /// The app is frontmost again. The core resumes/starts a session.
-    var onForeground: (() -> Void)?
+    var onForeground: (@Sendable () -> Void)? {
+        get { lock.lock(); defer { lock.unlock() }; return _onForeground }
+        set { lock.lock(); _onForeground = newValue; lock.unlock() }
+    }
+    private var _onForeground: (@Sendable () -> Void)?
 
     private var tokens: [NSObjectProtocol] = []
 
     /// Whether OS notifications are currently subscribed. `optOut()` and
     /// `shutdown()` must leave this `false` — the observers used to stay
     /// registered for the app's lifetime (M14).
-    var isObserving: Bool { !tokens.isEmpty }
+    var isObserving: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !tokens.isEmpty
+    }
 
     enum Transition {
         case background
@@ -109,12 +129,17 @@ final class LifecycleObserver {
     }
 
     func stop() {
-        tokens.forEach { NotificationCenter.default.removeObserver($0) }
+        lock.lock()
+        let observed = tokens
         tokens = []
+        lock.unlock()
+        observed.forEach { NotificationCenter.default.removeObserver($0) }
     }
 
-    private func observe(_ name: Notification.Name, _ center: NotificationCenter, _ handler: @escaping () -> Void) {
-        tokens.append(center.addObserver(forName: name, object: nil, queue: nil) { _ in handler() })
+    private func observe(_ name: Notification.Name, _ center: NotificationCenter,
+                         _ handler: @escaping @Sendable () -> Void) {
+        let token = center.addObserver(forName: name, object: nil, queue: nil) { _ in handler() }
+        lock.lock(); tokens.append(token); lock.unlock()
     }
 
     deinit { stop() }

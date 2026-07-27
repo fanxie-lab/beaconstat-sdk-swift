@@ -1,7 +1,9 @@
 import Foundation
 
 /// Durable store for the event queue. Survives process termination.
-protocol EventStore {
+/// `Sendable` so the queue that owns one can be captured alongside the rest of
+/// the core's state; `FileEventStore` is stateless apart from two immutable lets.
+protocol EventStore: Sendable {
     func load() -> [Event]
     /// Persists `events`, replacing whatever was there.
     ///
@@ -15,7 +17,7 @@ protocol EventStore {
 
 /// Atomic JSON-file store. A missing file loads as empty (a normal first
 /// launch); a corrupt one also loads as empty, but says so.
-final class FileEventStore: EventStore {
+final class FileEventStore: EventStore {  // both members are immutable `let`s
     private let fileURL: URL
     private let logger: Logger
 

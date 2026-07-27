@@ -182,3 +182,35 @@ extension XCTestCase {
         return url
     }
 }
+
+// MARK: - Degraded secure-store doubles (H5)
+
+/// A store whose durable tier is entirely broken: reads work (from memory),
+/// writes never persist. Stands in for "Keychain unusable AND no writable
+/// container" — the worst case of H5.
+final class NonDurableSecureStore: SecureStore, @unchecked Sendable {
+    private var storage: [SecureStoreKey: String] = [:]
+    private let lock = NSLock()
+
+    func string(forKey key: SecureStoreKey) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return storage[key]
+    }
+
+    @discardableResult
+    func set(_ value: String?, forKey key: SecureStoreKey) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        storage[key] = value
+        return false // accepted for this run, but will NOT be there next launch
+    }
+
+    var degradationDescription: String? { "test: secure storage is not durable" }
+}
+
+/// A `SecureStore` that behaves exactly like a Keychain the OS refuses:
+/// reads find nothing, writes are rejected.
+final class AlwaysFailingKeychainStub: SecureStore, @unchecked Sendable {
+    func string(forKey key: SecureStoreKey) -> String? { nil }
+    @discardableResult
+    func set(_ value: String?, forKey key: SecureStoreKey) -> Bool { false }
+}

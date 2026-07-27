@@ -1,7 +1,7 @@
 import Foundation
 
 /// One tracked event. `time` is an ISO 8601 string; `properties` values are strings.
-struct Event: Codable, Equatable {
+struct Event: Codable, Equatable, Sendable {
     /// Stable per-event idempotency id (H6).
     ///
     /// Generated **once**, when the event is created, and carried through the
@@ -61,7 +61,7 @@ extension CodingUserInfoKey {
 }
 
 /// The `/v1/events` request body.
-struct EventBatch: Encodable {
+struct EventBatch: Encodable, Sendable {
     let productVersion: String
     let environment: [String: String]
     let events: [Event]
@@ -110,4 +110,4 @@ enum IdempotencyKey {
 
 /// How a batch becomes wire bytes. A type alias rather than a bare closure so
 /// the `includeEventIds` argument is named at the injection site.
-typealias BatchEncoder = (_ batch: EventBatch, _ includeEventIds: Bool) throws -> Data
+typealias BatchEncoder = @Sendable (_ batch: EventBatch, _ includeEventIds: Bool) throws -> Data

@@ -1,27 +1,10 @@
 import XCTest
 @testable import Beaconstat
 
-/// A store whose durable tier is entirely broken: reads work (from memory),
-/// writes never persist. Stands in for "Keychain unusable AND no writable
-/// container" — the worst case of H5.
-private final class NonDurableSecureStore: SecureStore {
-    private var storage: [SecureStoreKey: String] = [:]
-    private let lock = NSLock()
+// `NonDurableSecureStore` and `AlwaysFailingKeychainStub` moved to
+// `TestSupport.swift` — `LoggerPrivacyTests` needs the same degraded-store
+// shapes, and a `private` double in one file cannot be reused.
 
-    func string(forKey key: SecureStoreKey) -> String? {
-        lock.lock(); defer { lock.unlock() }
-        return storage[key]
-    }
-
-    @discardableResult
-    func set(_ value: String?, forKey key: SecureStoreKey) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        storage[key] = value
-        return false // accepted for this run, but will NOT be there next launch
-    }
-
-    var degradationDescription: String? { "test: secure storage is not durable" }
-}
 
 /// H5 — the silent identity downgrade. Every one of these asserts on the
 /// *observable* consequence the review measured: phantom installs.
@@ -146,12 +129,4 @@ final class BeaconstatCoreIdentityTests: XCTestCase {
         launch(store: InMemorySecureStore(), queueFile: queueFile, log: log)
         XCTAssertFalse(log.contains("degraded"), log.joined)
     }
-}
-
-/// A `SecureStore` that behaves exactly like a Keychain the OS refuses:
-/// reads find nothing, writes are rejected.
-private final class AlwaysFailingKeychainStub: SecureStore {
-    func string(forKey key: SecureStoreKey) -> String? { nil }
-    @discardableResult
-    func set(_ value: String?, forKey key: SecureStoreKey) -> Bool { false }
 }

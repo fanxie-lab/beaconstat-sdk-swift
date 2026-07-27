@@ -31,7 +31,11 @@ import Foundation
 ///
 /// The flag is deliberately *not* part of `purgeLocalIdentity()`: it is the
 /// consent record, and losing it would silently re-enable collection.
-final class OptOutFlag {
+/// `@unchecked Sendable`: `cached` is the only mutable member and every read
+/// and write takes `lock`. It is deliberately read off the core's serial queue —
+/// that is the whole point of M4 — so it cannot rely on queue confinement the way
+/// the rest of the core's state does.
+final class OptOutFlag: @unchecked Sendable {
     private let store: SecureStore
     private let lock = NSLock()
     private var cached: Bool?

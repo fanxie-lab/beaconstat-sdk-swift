@@ -6,7 +6,7 @@ import Foundation
 /// Numeric options are *clamped*, not rejected (H4): a nonsensical
 /// `flushInterval` should cost you flush cadence, not all of your analytics.
 /// Every clamp is recorded in `clampNotices` for the core to log.
-struct Configuration {
+struct Configuration: Sendable {
     let publicKey: String
     let hmacSecret: String
     let baseURL: URL

@@ -2,7 +2,46 @@ import Foundation
 
 /// Serial-queue orchestrator behind the public facade. All mutable state is
 /// touched only on `queue`. Never throws into the host.
-final class BeaconstatCore {
+///
+/// ## Sendability (M13)
+///
+/// `@unchecked Sendable`, declared **once, here**, because that is where the
+/// invariant lives. The SDK could not be built in Swift 6 language mode at all
+/// (`static let shared` is a shared mutable global of a non-`Sendable` type), and
+/// under `-strict-concurrency=complete` 22 of the ~178 warnings were the single
+/// diagnostic "capture of 'self' with non-Sendable type 'BeaconstatCore' in a
+/// '@Sendable' closure", one per `queue.async` in this file. Annotating the 22
+/// sites would have been noise; annotating the type collapses all of them.
+///
+/// The invariant the annotation stands on, in full:
+///
+/// - **Every** mutable stored property below — `configuration`, `transport`,
+///   `session`, `collecting`, `logger`, `siteToken`, `handshaking`,
+///   `environment`, `volatileEnvironment`, `routesToTest`, `queue_`,
+///   `flushTimer`, `flushing`, `outstandingNetworkOps`, `stoppedForAuth`,
+///   `retryCount`, `retryTimer`, `sessionManager`, `reachability`,
+///   `lifecycleStarted`, `inBackground`, `reportedStoreDegradation`,
+///   `holdingBackgroundActivity`, `batchByteBudget` — is read and written only
+///   inside a block running on `queue`. Network completions re-hop before
+///   touching anything. There is not one `queue.sync` in the SDK.
+/// - The immutable `let`s are all of `Sendable` type: `store`, `clock`,
+///   `optOutFlag`, `backgroundActivity` and `lifecycleObserver` are each
+///   internally synchronised; the injected closures are `@Sendable`.
+/// - The two members deliberately reachable from *off* the queue are
+///   `optOutFlag` (M4 requires the consent getter not to lag, so it is
+///   lock-protected and read on the caller's thread) and `backgroundActivity`
+///   (H2 requires the assertion to be taken on the notification thread, before
+///   the hop). Both are internally synchronised; neither is core state.
+///
+/// This is why the type is not an `actor`. Actor isolation would replace a
+/// design the review verified as race-free with one that inserts a suspension
+/// point between, say, `dequeue → encode → sign → checkout` — the straight-line
+/// sequence whose atomicity is exactly what prevents double-send. It would also
+/// make every public entry point `async`, which a `UNNotificationServiceExtension`
+/// calling `pushReceived` from a synchronous delegate cannot use. The serial
+/// queue *is* the isolation domain; `@unchecked` says the compiler cannot see
+/// that, not that nobody checked.
+final class BeaconstatCore: @unchecked Sendable {
     static let shared = BeaconstatCore()
 
     private let queue = DispatchQueue(label: "com.beaconstat.sdk.core")
@@ -10,7 +49,7 @@ final class BeaconstatCore {
     /// Internal (not private) only so `BeaconstatCore+Collection.swift` can
     /// timestamp events; still written once, in `init`.
     let clock: Clock
-    private let sessionProvider: (Configuration) -> URLSession
+    private let sessionProvider: @Sendable (Configuration) -> URLSession
     private let bundleIdentifier: String
     // No `sdkVersion` here. It was stored and never read: the value on the wire
     // is `sdk.version`, which `EnvironmentCollector` fills from
@@ -18,8 +57,8 @@ final class BeaconstatCore {
     // `sdkVersion: "9.9.9"` believing it mattered, so a reader could reasonably
     // conclude the wire carried 9.9.9 (L5).
     private let queueFileURL: URL
-    /// Test seam: where `logger` writes. `nil` uses the default stdout sink.
-    private let logSink: ((String) -> Void)?
+    /// Test seam: where `logger` writes. `nil` uses unified logging (L6).
+    private let logSink: (@Sendable (String) -> Void)?
 
     private var configuration: Configuration?
     private var transport: Transport?
@@ -37,7 +76,7 @@ final class BeaconstatCore {
     private var environment: [String: String] = [:]
     /// Re-collects the volatile (main-thread) half of `environment`. Called on
     /// the main thread, once per foreground transition (L1).
-    private var volatileEnvironment: (() -> [String: String])?
+    private var volatileEnvironment: (@Sendable () -> [String: String])?
     private var routesToTest = false
     private var queue_: EventQueue?
     private var flushTimer: DispatchSourceTimer?
@@ -48,7 +87,7 @@ final class BeaconstatCore {
     private var retryTimer: DispatchSourceTimer?
     private var sessionManager: SessionManager?
     private var reachability: Reachability?
-    private let reachabilityFactory: (DispatchQueue) -> Reachability?
+    private let reachabilityFactory: @Sendable (DispatchQueue) -> Reachability?
     private let lifecycleObserver: LifecycleObserver
     private var lifecycleStarted = false
     /// Whether the app is currently outside the foreground, so `app_backgrounded`
@@ -79,10 +118,10 @@ final class BeaconstatCore {
              primary: KeychainSecureStore(),
              mirror: FileSecureStore(fileURL: BeaconstatCore.defaultIdentityFileURL())),
          clock: Clock = SystemClock(),
-         sessionProvider: @escaping (Configuration) -> URLSession = { _ in TelemetrySession.make() },
+         sessionProvider: @escaping @Sendable (Configuration) -> URLSession = { _ in TelemetrySession.make() },
          bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "unknown",
          queueFileURL: URL = BeaconstatCore.defaultQueueFileURL(),
-         reachabilityFactory: @escaping (DispatchQueue) -> Reachability? = { queue in
+         reachabilityFactory: @escaping @Sendable (DispatchQueue) -> Reachability? = { queue in
              #if canImport(Network)
              return NWPathReachability(queue: queue)
              #else
@@ -94,7 +133,7 @@ final class BeaconstatCore {
          payloadEncoder: @escaping BatchEncoder = { batch, includeEventIds in
              try PayloadEncoder.encode(batch, includeEventIds: includeEventIds)
          },
-         logSink: ((String) -> Void)? = nil) {
+         logSink: (@Sendable (String) -> Void)? = nil) {
         self.backgroundActivity = backgroundActivity
         self.payloadEncoder = payloadEncoder
         self.store = store
@@ -153,8 +192,8 @@ final class BeaconstatCore {
     ///     per-event path.
     func configure(publicKey: String, hmacSecret: String, options: BeaconstatOptions,
                    environment: [String: String],
-                   deferredEnvironment: (() -> [String: String])? = nil,
-                   volatileEnvironment: (() -> [String: String])? = nil) {
+                   deferredEnvironment: (@Sendable () -> [String: String])? = nil,
+                   volatileEnvironment: (@Sendable () -> [String: String])? = nil) {
         queue.async {
             self.volatileEnvironment = volatileEnvironment
             // Build a logger up front so opt-out / bad-key diagnostics actually emit.
@@ -278,30 +317,44 @@ final class BeaconstatCore {
         startFlushTimer(interval: config.options.flushInterval)
         if reachability == nil {
             let monitor = reachabilityFactory(queue)
-            monitor?.onReconnect = { [weak self] in self?.queue.async { self?.flushInternal() } }
+            // `guard let self` and then a *strong* capture in the hop, rather
+            // than `self?.queue.async { self?.… }`. The nested optional capture
+            // warns under strict concurrency ("reference to captured var
+            // 'self'"), and it bought nothing: the monitor is owned by the core,
+            // so if the core is gone this closure is gone too. Holding the core
+            // for the length of a queue hop cannot cycle — the stored closure
+            // itself still only holds a weak reference.
+            monitor?.onReconnect = { [weak self] in
+                guard let self else { return }
+                self.queue.async { self.flushInternal() }
+            }
             monitor?.start()
             reachability = monitor
         }
         if !lifecycleStarted {
             lifecycleObserver.onBackground = { [weak self] in
+                guard let self else { return }
                 // Take the assertion HERE, on the notification thread, before
                 // hopping onto the serial queue. The OS starts counting down at
                 // the notification, so the hop and the `app_backgrounded`
                 // enqueue would otherwise be spent from a ~5 s budget (H2).
                 // `begin` is idempotent and internally synchronised.
-                self?.backgroundActivity.begin(expiration: { [weak self] in
-                    self?.queue.async { self?.handleBackgroundActivityExpiry() }
+                self.backgroundActivity.begin(expiration: { [weak self] in
+                    guard let self else { return }
+                    self.queue.async { self.handleBackgroundActivityExpiry() }
                 })
-                self?.queue.async { self?.handleBackground() }
+                self.queue.async { self.handleBackground() }
             }
             // macOS only, and no background assertion: losing focus doesn't
             // start a suspension countdown, and the Mac has no assertion to
             // take (M3).
             lifecycleObserver.onResignActive = { [weak self] in
-                self?.queue.async { self?.handleResignActive() }
+                guard let self else { return }
+                self.queue.async { self.handleResignActive() }
             }
             lifecycleObserver.onForeground = { [weak self] in
-                self?.queue.async { self?.handleForeground() }
+                guard let self else { return }
+                self.queue.async { self.handleForeground() }
             }
             lifecycleObserver.start()
             lifecycleStarted = true
@@ -414,8 +467,8 @@ final class BeaconstatCore {
         transport.handshake(apiKey: config.publicKey, fingerprint: fingerprint,
                             productVersion: config.options.productVersionOrDefault,
                             environmentType: environmentType) { [weak self] result in
-            self?.queue.async {
-                guard let self else { return }
+            guard let self else { return }
+            self.queue.async {
                 self.outstandingNetworkOps -= 1
                 self.handshaking = false
                 defer { self.endBackgroundActivityIfIdle() }
@@ -470,7 +523,7 @@ final class BeaconstatCore {
     ///
     /// Internal rather than private because the entry points themselves live in
     /// `BeaconstatCore+Collection.swift`.
-    func onQueueIfCollecting(_ body: @escaping () -> Void) {
+    func onQueueIfCollecting(_ body: @escaping @Sendable () -> Void) {
         queue.async {
             guard !self.isOptedOut, self.configuration != nil else { return }
             body()
@@ -553,11 +606,11 @@ final class BeaconstatCore {
     /// The cost of compiling it into Release is one method that nothing outside
     /// the module can name and nothing inside the module calls, so it is
     /// dead-stripped from a shipping binary.
-    func onQuiescent(_ block: @escaping () -> Void) {
+    func onQuiescent(_ block: @escaping @Sendable () -> Void) {
         queue.async { self.pollQuiescent(block) }
     }
 
-    private func pollQuiescent(_ block: @escaping () -> Void) {
+    private func pollQuiescent(_ block: @escaping @Sendable () -> Void) {
         if outstandingNetworkOps == 0 && !flushing {
             DispatchQueue.main.async(execute: block)
         } else {
@@ -645,8 +698,8 @@ extension BeaconstatCore {
         transport.sendBatch(bodyData: bodyData, apiKey: config.publicKey, siteToken: siteToken,
                             signature: signature, timestamp: timestamp, isTest: routesToTest,
                             idempotencyKey: idempotencyKey) { [weak self] result in
-            self?.queue.async {
-                guard let self else { return }
+            guard let self else { return }
+            self.queue.async {
                 self.outstandingNetworkOps -= 1
                 self.flushing = false
                 // Opted out mid-flight: `optOut()`'s purge is ordered ahead of
@@ -918,9 +971,10 @@ extension BeaconstatCore {
         DispatchQueue.main.async { [weak self] in
             // On the main thread by construction, which is what
             // `collectMainThreadOnlyAssumingMainThread` needs.
+            guard let self else { return }
             let fresh = volatileEnvironment()
-            self?.queue.async {
-                guard let self, !self.isOptedOut else { return }
+            self.queue.async {
+                guard !self.isOptedOut else { return }
                 self.environment.merge(fresh) { _, new in new }
             }
         }

@@ -1,6 +1,6 @@
 import Foundation
 
-struct SessionStart {
+struct SessionStart: Sendable {
     let id: String
     let isFirst: Bool
     let previousAt: String?
@@ -9,7 +9,12 @@ struct SessionStart {
 /// Owns session identity + the inactivity-timeout rule. Not thread-safe — the
 /// core touches it only on its serial queue. A fresh process (new instance)
 /// with no in-memory session always starts a new one.
-final class SessionManager {
+/// `@unchecked Sendable`, and unlike the stores in `SecureStore.swift` this
+/// one holds **no lock**: it is queue-confined. Every method is called from the
+/// core's serial queue and from nowhere else. The annotation records that
+/// promise; `ConcurrencySoakTests` is what keeps it honest, by driving the core
+/// from eight threads and checking the session bookkeeping still balances.
+final class SessionManager: @unchecked Sendable {
     private let store: SecureStore
     private let clock: Clock
     private var timeout: TimeInterval

@@ -1,11 +1,11 @@
 import Foundation
 
-struct HandshakeResponse: Decodable, Equatable {
+struct HandshakeResponse: Decodable, Equatable, Sendable {
     let siteToken: String
     let serverTime: String
 }
 
-enum TransportError: Error, Equatable {
+enum TransportError: Error, Equatable, Sendable {
     case network            // offline / timeout / 408 — retryable
     case unauthorized       // 401 — stop sending
     case badRequest         // 400 and every other non-retryable 4xx — drop the batch
@@ -91,15 +91,20 @@ enum TelemetrySession {
 
 /// Thin URLSession transport. Signing/timestamps are computed by the core and
 /// passed in — Transport never re-encodes the body.
-final class Transport {
+/// Genuinely `Sendable`, no escape hatch: every member is an immutable `let` of
+/// a `Sendable` type. That only became true once `Logger` was made `Sendable` —
+/// the logger is captured by both completion handlers, so a non-`Sendable` one
+/// produced a warning in each (M13).
+final class Transport: Sendable {
     private let session: URLSession
     private let baseURL: URL
     private let logger: Logger
     /// Wall clock for resolving an HTTP-date `Retry-After`. Injectable so the
     /// parse is testable without waiting.
-    private let now: () -> Date
+    private let now: @Sendable () -> Date
 
-    init(session: URLSession, baseURL: URL, logger: Logger, now: @escaping () -> Date = Date.init) {
+    init(session: URLSession, baseURL: URL, logger: Logger,
+         now: @escaping @Sendable () -> Date = { Date() }) {
         self.session = session
         self.baseURL = baseURL
         self.logger = logger
@@ -109,13 +114,17 @@ final class Transport {
     /// `Transport` used to discard `allHeaderFields` entirely, so a 429's
     /// `Retry-After` was invisible and the SDK backed off on its own guess
     /// instead of the server's instruction (M9).
-    private func retryAfter(_ http: HTTPURLResponse) -> TimeInterval? {
-        RetryAfter.parse(http.value(forHTTPHeaderField: "Retry-After"), now: now())
+    /// A `@Sendable` closure rather than a method, because it is captured by
+    /// both completion handlers, which `URLSession` requires to be `@Sendable`.
+    /// Capturing `self` there would drag the whole transport across the boundary.
+    private var retryAfter: @Sendable (HTTPURLResponse) -> TimeInterval? {
+        let now = self.now
+        return { http in RetryAfter.parse(http.value(forHTTPHeaderField: "Retry-After"), now: now()) }
     }
 
     func handshake(apiKey: String, fingerprint: String, productVersion: String,
                    environmentType: String,
-                   completion: @escaping (Result<HandshakeResponse, TransportError>) -> Void) {
+                   completion: @escaping @Sendable (Result<HandshakeResponse, TransportError>) -> Void) {
         var request = URLRequest(url: baseURL.appendingPathComponent("v1/handshake"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -151,7 +160,7 @@ final class Transport {
     ///   signature's canonical payload, so it cannot invalidate it.
     func sendBatch(bodyData: Data, apiKey: String, siteToken: String, signature: String,
                    timestamp: String, isTest: Bool, idempotencyKey: String,
-                   completion: @escaping (Result<Void, TransportError>) -> Void) {
+                   completion: @escaping @Sendable (Result<Void, TransportError>) -> Void) {
         let path = isTest ? "v1/debug/events" : "v1/events"
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = "POST"
