@@ -324,6 +324,10 @@ final class BeaconstatCore {
             lifecycleObserver.stop()
             lifecycleStarted = false
         }
+        // While the observers are off, foreground transitions go unseen, so the
+        // flag would still say "backgrounded" when collection resumes and would
+        // swallow the next real departure (M3). Arm it instead.
+        inBackground = false
         endBackgroundActivity()
     }
 

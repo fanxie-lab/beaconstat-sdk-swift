@@ -164,6 +164,27 @@ final class BeaconstatCoreResignActiveTests: XCTestCase {
         c.shutdown()
     }
 
+    /// An opt-out/opt-in cycle taken while the app is backgrounded tears the
+    /// observers down, so the foreground that follows is never seen. The
+    /// de-duplication flag must not then swallow the next real departure.
+    func testOptOutAndBackInReArmsTheBackgroundEvent() {
+        handshake202()
+        let file = tempQueue(); defer { try? FileManager.default.removeItem(at: file) }
+        let observer = LifecycleObserver()
+        let c = core(file: file, observer: observer)
+        configure(c); drain(c, "configured")
+
+        observer.onBackground?(); drain(c, "backgrounded")
+        c.optOut(); drain(c, "opted out")
+        c.optIn(); drain(c, "opted in")
+        MockURLProtocol.reset(); handshake202()
+
+        observer.onBackground?(); c.flush(); drain(c, "backgrounded again")
+        XCTAssertEqual(sentEventNames().filter { $0 == "_bcs.apple.app_backgrounded" }.count, 1,
+                       "\(sentEventNames())")
+        c.shutdown()
+    }
+
     /// The kill switch covers the new path as well.
     func testResignActiveDoesNothingWhileOptedOut() {
         handshake202()
