@@ -161,7 +161,8 @@ final class BeaconstatCore {
                 if let queue_ = self.queue_ {
                     queue_.setMaxQueued(opts.maxQueuedEvents)
                 } else {
-                    self.queue_ = EventQueue(store: FileEventStore(fileURL: self.queueFileURL),
+                    self.queue_ = EventQueue(store: FileEventStore(fileURL: self.queueFileURL,
+                                                                  logger: self.logger),
                                              maxQueued: opts.maxQueuedEvents, logger: self.logger)
                 }
                 if let sessionManager = self.sessionManager {

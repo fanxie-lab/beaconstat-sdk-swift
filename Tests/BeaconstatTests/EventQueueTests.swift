@@ -4,8 +4,15 @@ import XCTest
 final class EventQueueTests: XCTestCase {
     private final class MemStore: EventStore {
         var events: [Event] = []
+        /// Set to false to simulate a store that has stopped accepting writes.
+        var writable = true
         func load() -> [Event] { events }
-        func save(_ e: [Event]) { events = e }
+        @discardableResult
+        func save(_ e: [Event]) -> Bool {
+            guard writable else { return false }
+            events = e
+            return true
+        }
     }
     private func log() -> Logger { Logger(enabled: false, sink: { _ in }) }
     private func ev(_ n: Int) -> Event { Event(name: "e\(n)", time: "t\(n)") }

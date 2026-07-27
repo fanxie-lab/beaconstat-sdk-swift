@@ -7,6 +7,9 @@ final class EventQueue {
     private let store: EventStore
     private var maxQueued: Int
     private let logger: Logger
+    /// Set once the store first refuses a write, so the "not durable" warning
+    /// is emitted once rather than on every enqueue (L3).
+    private var reportedNotDurable = false
 
     init(store: EventStore, maxQueued: Int, logger: Logger) {
         self.store = store
@@ -17,6 +20,17 @@ final class EventQueue {
 
     var count: Int { events.count }
     var isEmpty: Bool { events.isEmpty }
+
+    /// Persists, and surfaces the first failure. The whole delivery model rests
+    /// on "a crash or suspension replays from disk", so a store that has stopped
+    /// accepting writes is a fact the host needs in its log (L3).
+    private func persist() {
+        guard !store.save(events) else { return }
+        guard !reportedNotDurable else { return }
+        reportedNotDurable = true
+        logger.debug("the event queue is no longer durable — writes to disk are failing, so "
+                     + "queued events will not survive termination")
+    }
 
     /// Applies a new cap on reconfigure, in place, so the queue *instance* is
     /// never replaced while a flush completion still holds a checked-out batch
@@ -29,7 +43,7 @@ final class EventQueue {
         let overflow = events.count - maxQueued
         events.removeFirst(overflow)
         logger.debug("maxQueuedEvents lowered to \(maxQueued) — dropped \(overflow) oldest event(s)")
-        store.save(events)
+        persist()
     }
 
     func enqueue(_ event: Event) {
@@ -39,7 +53,7 @@ final class EventQueue {
             events.removeFirst(overflow)
             logger.debug("queue full — dropped \(overflow) oldest event(s)")
         }
-        store.save(events)
+        persist()
     }
 
     /// Up to `min(max, 100, count)` events from the front (does not remove).
@@ -50,7 +64,7 @@ final class EventQueue {
     func removeFirst(_ n: Int) {
         guard n > 0 else { return }
         events.removeFirst(Swift.min(n, events.count))
-        store.save(events)
+        persist()
     }
 
     /// Removes AND returns up to `min(max, 100, count)` events from the front.
@@ -61,7 +75,7 @@ final class EventQueue {
         guard n > 0 else { return [] }
         let batch = Array(events.prefix(n))
         events.removeFirst(n)
-        store.save(events)
+        persist()
         return batch
     }
 
@@ -75,11 +89,11 @@ final class EventQueue {
             events.removeFirst(overflow)
             logger.debug("queue full on requeue — dropped \(overflow) oldest event(s)")
         }
-        store.save(events)
+        persist()
     }
 
     func clear() {
         events.removeAll()
-        store.save(events)
+        persist()
     }
 }
