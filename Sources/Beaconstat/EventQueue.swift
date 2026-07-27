@@ -85,13 +85,70 @@ final class EventQueue {
         persist()
     }
 
+    /// Events that must not be dropped while anything else could go instead
+    /// (M8).
+    ///
+    /// Each is emitted at most once per install, per session, or per version
+    /// transition, and none can be reconstructed afterwards — losing one loses
+    /// an install, a session, or an upgrade outright. An arbitrary custom event
+    /// is one of many and costs a data point.
+    ///
+    /// This was the sharp edge of front-eviction: these are enqueued *first* on
+    /// a launch, so they were always the first casualties of an offline chatty
+    /// session — the SDK dropped precisely the events it exists to report and
+    /// kept the ones it doesn't.
+    static let highValueEventNames: Set<String> = [
+        "_bcs.install_detected",
+        "_bcs.session_started",
+        "_bcs.apple.app_updated",
+    ]
+
+    /// Brings the queue back under its cap, sacrificing the least valuable
+    /// events available.
+    ///
+    /// Order of sacrifice:
+    /// 1. ordinary pending events, oldest first;
+    /// 2. high-value pending events, oldest first — only once nothing else is
+    ///    left. An absolute "never evict" would let a queue of nothing but
+    ///    session starts grow without bound, which is a worse failure than
+    ///    dropping the oldest of them.
+    ///
+    /// In-flight events are never candidates: they live in `inFlight`, not
+    /// `pending`. Residency is therefore bounded by
+    /// `maxQueued + one batch`, and a batch being retried is no longer the
+    /// preferred casualty of the next overflow.
     private func evictIfOverCap(reason: String) {
-        let overflow = count - maxQueued
+        var overflow = count - maxQueued
         guard overflow > 0 else { return }
-        let dropped = Swift.min(overflow, pending.count)
-        guard dropped > 0 else { return }
-        pending.removeFirst(dropped)
-        logger.debug("\(reason) — dropped \(dropped) oldest event(s)")
+
+        var survivors: [Event] = []
+        survivors.reserveCapacity(pending.count)
+        var droppedOrdinary = 0
+        for event in pending {
+            if overflow > 0, !Self.highValueEventNames.contains(event.name) {
+                overflow -= 1
+                droppedOrdinary += 1
+                continue
+            }
+            survivors.append(event)
+        }
+        pending = survivors
+
+        var droppedHighValue = 0
+        if overflow > 0 {
+            // Everything left is high-value. Bounded fallback, oldest first.
+            droppedHighValue = Swift.min(overflow, pending.count)
+            pending.removeFirst(droppedHighValue)
+        }
+
+        if droppedOrdinary > 0 {
+            logger.debug("\(reason) — dropped \(droppedOrdinary) oldest event(s)")
+        }
+        if droppedHighValue > 0 {
+            logger.debug("\(reason) — dropped \(droppedHighValue) oldest high-value event(s) "
+                         + "(install/session/update); the queue holds nothing cheaper to drop, "
+                         + "so raise maxQueuedEvents or flush more often")
+        }
     }
 
     // MARK: - Consuming
