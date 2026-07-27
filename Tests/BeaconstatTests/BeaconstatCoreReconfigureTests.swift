@@ -63,7 +63,7 @@ final class BeaconstatCoreReconfigureTests: XCTestCase {
         let file = tempQueue(); defer { try? FileManager.default.removeItem(at: file) }
         let c = BeaconstatCore(store: InMemorySecureStore(), clock: SystemClock(),
                                sessionProvider: { _ in .mocked() },
-                               bundleIdentifier: "com.example.app", sdkVersion: "9.9.9",
+                               bundleIdentifier: "com.example.app",
                                queueFileURL: file, reachabilityFactory: { _ in nil })
         configure(c) { $0.maxQueuedEvents = 500 }
         drain(c, "first configure")
@@ -83,7 +83,7 @@ final class BeaconstatCoreReconfigureTests: XCTestCase {
         let clock = SteppableClock(Date(timeIntervalSince1970: 1_776_594_600))
         let c = BeaconstatCore(store: InMemorySecureStore(), clock: clock,
                                sessionProvider: { _ in .mocked() },
-                               bundleIdentifier: "com.example.app", sdkVersion: "9.9.9",
+                               bundleIdentifier: "com.example.app",
                                queueFileURL: file, reachabilityFactory: { _ in nil })
         configure(c) { $0.sessionTimeout = 86_400 }
         drain(c, "first configure")
@@ -118,7 +118,7 @@ final class BeaconstatCoreReconfigureTests: XCTestCase {
                                    return URLSession(configuration: config, delegate: witness,
                                                      delegateQueue: nil)
                                },
-                               bundleIdentifier: "com.example.app", sdkVersion: "9.9.9",
+                               bundleIdentifier: "com.example.app",
                                queueFileURL: file, reachabilityFactory: { _ in nil })
         configure(c)
         drain(c, "first configure")
@@ -140,7 +140,7 @@ final class BeaconstatCoreReconfigureTests: XCTestCase {
         let observer = LifecycleObserver()
         let c = BeaconstatCore(store: InMemorySecureStore(), clock: SystemClock(),
                                sessionProvider: { _ in .mocked() },
-                               bundleIdentifier: "com.example.app", sdkVersion: "9.9.9",
+                               bundleIdentifier: "com.example.app",
                                queueFileURL: file, reachabilityFactory: { _ in reachability },
                                lifecycleObserver: observer)
         configure(c)
@@ -158,7 +158,7 @@ final class BeaconstatCoreReconfigureTests: XCTestCase {
         let file = tempQueue(); defer { try? FileManager.default.removeItem(at: file) }
         let c = BeaconstatCore(store: InMemorySecureStore(), clock: SystemClock(),
                                sessionProvider: { _ in .mocked() },
-                               bundleIdentifier: "com.example.app", sdkVersion: "9.9.9",
+                               bundleIdentifier: "com.example.app",
                                queueFileURL: file, reachabilityFactory: { _ in nil })
         configure(c)
         drain(c, "configured")
@@ -179,7 +179,7 @@ final class BeaconstatCoreReconfigureTests: XCTestCase {
         let file = tempQueue(); defer { try? FileManager.default.removeItem(at: file) }
         let c = BeaconstatCore(store: InMemorySecureStore(), clock: SystemClock(),
                                sessionProvider: { _ in .mocked() },
-                               bundleIdentifier: "com.example.app", sdkVersion: "9.9.9",
+                               bundleIdentifier: "com.example.app",
                                queueFileURL: file, reachabilityFactory: { _ in nil })
         configure(c)
         drain(c, "configured")
@@ -202,7 +202,7 @@ final class BeaconstatCoreReconfigureTests: XCTestCase {
         let file = tempQueue(); defer { try? FileManager.default.removeItem(at: file) }
         let c = BeaconstatCore(store: InMemorySecureStore(), clock: SystemClock(),
                                sessionProvider: { _ in .mocked() },
-                               bundleIdentifier: "com.example.app", sdkVersion: "9.9.9",
+                               bundleIdentifier: "com.example.app",
                                queueFileURL: file, reachabilityFactory: { _ in nil })
         configure(c)
         drain(c, "configured")
@@ -213,7 +213,7 @@ final class BeaconstatCoreReconfigureTests: XCTestCase {
     func testShutdownBeforeConfigureIsSafe() {
         let c = BeaconstatCore(store: InMemorySecureStore(), clock: SystemClock(),
                                sessionProvider: { _ in .mocked() },
-                               bundleIdentifier: "com.example.app", sdkVersion: "9.9.9",
+                               bundleIdentifier: "com.example.app",
                                queueFileURL: tempQueue(), reachabilityFactory: { _ in nil })
         c.shutdown()
         drain(c, "shut down")

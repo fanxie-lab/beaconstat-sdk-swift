@@ -10,7 +10,7 @@ final class BeaconstatCoreCheckoutTests: XCTestCase {
         BeaconstatCore(store: InMemorySecureStore(),
                        clock: SystemClock(dateProvider: { Date(timeIntervalSince1970: 1_776_594_600) }),
                        sessionProvider: { _ in .mocked() },
-                       bundleIdentifier: "com.example.app", sdkVersion: "9.9.9", queueFileURL: file)
+                       bundleIdentifier: "com.example.app", queueFileURL: file)
     }
 
     // 5xx must re-prepend the checked-out batch (no loss) — the whole point of the model.

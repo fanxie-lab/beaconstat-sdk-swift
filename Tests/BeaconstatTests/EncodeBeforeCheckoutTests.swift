@@ -19,13 +19,17 @@ final class EncodeBeforeCheckoutTests: XCTestCase {
             store: InMemorySecureStore(),
             clock: SystemClock(dateProvider: { Date(timeIntervalSince1970: 1_776_594_600) }),
             sessionProvider: { _ in .mocked() },
-            bundleIdentifier: "com.example.app", sdkVersion: "9.9.9", queueFileURL: file,
+            bundleIdentifier: "com.example.app", queueFileURL: file,
             reachabilityFactory: { _ in nil },
             payloadEncoder: encoder)
     }
 
     private func configure(_ core: BeaconstatCore) {
         var options = BeaconstatOptions()
+        // Explicit rather than inherited from the build configuration — see
+        // ConfigurationClampTests. Under Release the logger is off by default,
+        // so a log assertion would pass vacuously.
+        options.debugLogging = true
         options.flushInterval = 3600
         options.maxRetries = 0
         core.configure(publicKey: "bcs_pub_abcdef0123456789", hmacSecret: validHmac,
@@ -101,7 +105,7 @@ final class EncodeBeforeCheckoutTests: XCTestCase {
             store: InMemorySecureStore(),
             clock: SystemClock(dateProvider: { Date(timeIntervalSince1970: 1_776_594_600) }),
             sessionProvider: { _ in .mocked() },
-            bundleIdentifier: "com.example.app", sdkVersion: "9.9.9", queueFileURL: file,
+            bundleIdentifier: "com.example.app", queueFileURL: file,
             reachabilityFactory: { _ in nil },
             payloadEncoder: { _, _ in throw EncodingRefused() },
             logSink: collector.append)

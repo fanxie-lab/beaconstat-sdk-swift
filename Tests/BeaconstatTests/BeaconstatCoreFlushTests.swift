@@ -11,7 +11,7 @@ final class BeaconstatCoreFlushTests: XCTestCase {
         let core = BeaconstatCore(store: store,
                                   clock: SystemClock(dateProvider: { Date(timeIntervalSince1970: 1_776_580_200) }),
                                   sessionProvider: { _ in .mocked() },
-                                  bundleIdentifier: "com.example.app", sdkVersion: "9.9.9",
+                                  bundleIdentifier: "com.example.app",
                                   queueFileURL: queueFile)
         var opts = BeaconstatOptions(); opts.flushInterval = 3600 // disable timer noise in test
         core.configure(publicKey: "bcs_pub_abcdef0123456789", hmacSecret: validHmac,

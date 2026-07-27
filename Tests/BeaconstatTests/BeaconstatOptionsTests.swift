@@ -15,10 +15,22 @@ final class BeaconstatOptionsTests: XCTestCase {
         XCTAssertEqual(o.testMode, .automatic)
     }
 
-    func testFlushIntervalIsThirtySecondsUnderDebug() {
-        // `swift test` builds the DEBUG configuration.
+    /// The default cadence is build-configuration dependent, and until
+    /// `swift test -c release` compiled (test gap 6) only the Debug half of it
+    /// was ever asserted — the 4-hour Release default that M9's
+    /// "retries exhausted" path exists to work around was pinned by nothing.
+    func testFlushIntervalDefaultMatchesTheBuildConfiguration() {
+        #if DEBUG
         XCTAssertEqual(BeaconstatOptions().flushInterval, 30)
         XCTAssertEqual(BeaconstatOptions.defaultFlushInterval, 30)
+        #else
+        XCTAssertEqual(BeaconstatOptions().flushInterval, 14_400)
+        XCTAssertEqual(BeaconstatOptions.defaultFlushInterval, 14_400)
+        #endif
+        // Whatever the configuration, the default must survive `Configuration`'s
+        // clamp untouched — a default outside its own limits would be absurd.
+        XCTAssertTrue(BeaconstatOptions.Limits.flushInterval
+            .contains(BeaconstatOptions.defaultFlushInterval))
     }
 
     func testEndpointIsOverridable() {

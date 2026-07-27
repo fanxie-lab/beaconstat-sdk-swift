@@ -59,11 +59,15 @@ final class BeaconstatCoreIdentityTests: XCTestCase {
         let core = BeaconstatCore(store: store,
                                   clock: SystemClock(dateProvider: { Date(timeIntervalSince1970: 1_776_580_200) }),
                                   sessionProvider: { _ in .mocked() },
-                                  bundleIdentifier: "com.example.app", sdkVersion: "9.9.9",
+                                  bundleIdentifier: "com.example.app",
                                   queueFileURL: queueFile,
                                   reachabilityFactory: { _ in nil },
                                   logSink: log.map { collector in { collector.append($0) } })
         var o = BeaconstatOptions(); o.flushInterval = 3600
+        // Explicit, not inherited from the build configuration: the logger is
+        // `debugLogging || isDebugBuild`, so the degradation assertions below
+        // would pass vacuously under `swift test -c release`.
+        o.debugLogging = true
         core.configure(publicKey: "bcs_pub_abcdef0123456789", hmacSecret: validHmac,
                        options: o, environment: ["device.platform": "ios", "app.version": "1.0.0"])
         let done = expectation(description: "launch"); core.onQuiescent { done.fulfill() }

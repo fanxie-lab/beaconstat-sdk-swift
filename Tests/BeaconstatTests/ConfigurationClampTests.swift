@@ -136,10 +136,14 @@ final class ConfigurationClampTests: XCTestCase {
         let core = BeaconstatCore(store: InMemorySecureStore(),
                                   clock: SystemClock(),
                                   sessionProvider: { _ in .mocked() },
-                                  bundleIdentifier: "com.example.app", sdkVersion: "9.9.9",
+                                  bundleIdentifier: "com.example.app",
                                   queueFileURL: file,
                                   logSink: { log.append($0) })
         var o = BeaconstatOptions()
+        // Explicit, not inherited from the build configuration: the logger is
+        // `debugLogging || isDebugBuild`, so a test that asserts on log output
+        // silently asserted nothing under `swift test -c release`.
+        o.debugLogging = true
         o.flushInterval = 0
         o.batchSize = 0
         o.sessionTimeout = 0

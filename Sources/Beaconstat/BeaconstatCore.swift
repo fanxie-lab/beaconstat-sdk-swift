@@ -12,7 +12,11 @@ final class BeaconstatCore {
     let clock: Clock
     private let sessionProvider: (Configuration) -> URLSession
     private let bundleIdentifier: String
-    private let sdkVersion: String
+    // No `sdkVersion` here. It was stored and never read: the value on the wire
+    // is `sdk.version`, which `EnvironmentCollector` fills from
+    // `BeaconstatVersion.current` in the facade. Every core test passed
+    // `sdkVersion: "9.9.9"` believing it mattered, so a reader could reasonably
+    // conclude the wire carried 9.9.9 (L5).
     private let queueFileURL: URL
     /// Test seam: where `logger` writes. `nil` uses the default stdout sink.
     private let logSink: ((String) -> Void)?
@@ -77,7 +81,6 @@ final class BeaconstatCore {
          clock: Clock = SystemClock(),
          sessionProvider: @escaping (Configuration) -> URLSession = { _ in TelemetrySession.make() },
          bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "unknown",
-         sdkVersion: String = BeaconstatVersion.current,
          queueFileURL: URL = BeaconstatCore.defaultQueueFileURL(),
          reachabilityFactory: @escaping (DispatchQueue) -> Reachability? = { queue in
              #if canImport(Network)
@@ -98,7 +101,6 @@ final class BeaconstatCore {
         self.clock = clock
         self.sessionProvider = sessionProvider
         self.bundleIdentifier = bundleIdentifier
-        self.sdkVersion = sdkVersion
         self.queueFileURL = queueFileURL
         self.reachabilityFactory = reachabilityFactory
         self.lifecycleObserver = lifecycleObserver
@@ -535,14 +537,26 @@ final class BeaconstatCore {
     /// `Beaconstat.isOptedOut` freely.
     var isOptedOut: Bool { optOutFlag.value }
 
-    // MARK: - Test hook
+    // MARK: - Test seam
 
-    #if DEBUG
     /// Fires `block` on main once all in-flight network work has drained
-    /// (deterministic — no fixed delay). Test-only.
+    /// (deterministic — no fixed delay).
+    ///
+    /// `internal`, so it is invisible to hosts, but **not** `#if DEBUG`. It used
+    /// to be, and the consequence was that `swift test -c release` did not
+    /// compile at all: forty-odd call sites across the suite failed with "value
+    /// of type 'BeaconstatCore' has no member 'onQuiescent'". Release-only
+    /// behaviour — `routesToTest == false` so batches go to `/v1/events`, and a
+    /// 4-hour default `flushInterval` — was therefore never executed by any test,
+    /// in CI or locally (test gap 6).
+    ///
+    /// The cost of compiling it into Release is one method that nothing outside
+    /// the module can name and nothing inside the module calls, so it is
+    /// dead-stripped from a shipping binary.
     func onQuiescent(_ block: @escaping () -> Void) {
         queue.async { self.pollQuiescent(block) }
     }
+
     private func pollQuiescent(_ block: @escaping () -> Void) {
         if outstandingNetworkOps == 0 && !flushing {
             DispatchQueue.main.async(execute: block)
@@ -550,7 +564,6 @@ final class BeaconstatCore {
             queue.asyncAfter(deadline: .now() + 0.005) { self.pollQuiescent(block) }
         }
     }
-    #endif
 }
 
 // MARK: - Delivery: batching, sending, acknowledging, retrying

@@ -32,7 +32,7 @@ final class ReachabilityTests: XCTestCase {
         let c = BeaconstatCore(store: InMemorySecureStore(),
                                clock: SystemClock(dateProvider: { Date(timeIntervalSince1970: 1_776_594_600) }),
                                sessionProvider: { _ in .mocked() },
-                               bundleIdentifier: "com.example.app", sdkVersion: "9.9.9",
+                               bundleIdentifier: "com.example.app",
                                queueFileURL: file,
                                reachabilityFactory: { _ in fake })
         var o = BeaconstatOptions(); o.flushInterval = 3600

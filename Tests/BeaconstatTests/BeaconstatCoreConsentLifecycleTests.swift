@@ -42,7 +42,7 @@ final class BeaconstatCoreConsentLifecycleTests: XCTestCase {
         BeaconstatCore(store: store,
                        clock: SystemClock(dateProvider: { Date(timeIntervalSince1970: 1_776_580_200) }),
                        sessionProvider: { _ in .mocked() },
-                       bundleIdentifier: "com.example.app", sdkVersion: "9.9.9",
+                       bundleIdentifier: "com.example.app",
                        queueFileURL: file, reachabilityFactory: { _ in reachability },
                        lifecycleObserver: observer)
     }

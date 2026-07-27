@@ -47,8 +47,16 @@ final class EnvironmentCollectorTests: XCTestCase {
         for f in flags { XCTAssertTrue(e[f] == "true" || e[f] == "false") }
     }
 
-    func testDebugIsTrueUnderSwiftTest() {
+    /// `run_context.is_debug` reports the build configuration of the *SDK*, and
+    /// it is what `.automatic` test-mode routing keys off. Asserting the Debug
+    /// value only was safe while `swift test -c release` didn't compile; now that
+    /// it does, this has to track the configuration or it fails there (test gap 6).
+    func testDebugFlagTracksTheBuildConfiguration() {
+        #if DEBUG
         XCTAssertEqual(env()["run_context.is_debug"], "true")
+        #else
+        XCTAssertEqual(env()["run_context.is_debug"], "false")
+        #endif
     }
 
     func testTargetEnvironmentIsNativeOnMac() {

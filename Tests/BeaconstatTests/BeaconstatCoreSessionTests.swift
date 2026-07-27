@@ -17,7 +17,7 @@ final class BeaconstatCoreSessionTests: XCTestCase {
         BeaconstatCore(store: InMemorySecureStore(),
                        clock: SystemClock(dateProvider: { Date(timeIntervalSince1970: 1_776_580_200) }),
                        sessionProvider: { _ in .mocked() },
-                       bundleIdentifier: "com.example.app", sdkVersion: "9.9.9", queueFileURL: file)
+                       bundleIdentifier: "com.example.app", queueFileURL: file)
     }
 
     func testSessionStartedAndInstallAreTaggedAndFirst() {
@@ -149,7 +149,7 @@ final class BeaconstatCoreSessionTests: XCTestCase {
         let c = BeaconstatCore(store: store,
                                clock: SystemClock(dateProvider: { Date(timeIntervalSince1970: 1_776_580_200) }),
                                sessionProvider: { _ in .mocked() },
-                               bundleIdentifier: "com.example.app", sdkVersion: "9.9.9", queueFileURL: file)
+                               bundleIdentifier: "com.example.app", queueFileURL: file)
         c.configure(publicKey: "bcs_pub_abcdef0123456789", hmacSecret: validHmac,
                     options: BeaconstatOptions(), environment: [:])
         c.track("feature_used", properties: [:])

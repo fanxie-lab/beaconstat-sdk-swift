@@ -106,7 +106,7 @@ final class EventIdempotencyTests: XCTestCase {
             store: InMemorySecureStore(),
             clock: SystemClock(dateProvider: { Date(timeIntervalSince1970: 1_776_594_600) }),
             sessionProvider: { _ in .mocked() },
-            bundleIdentifier: "com.example.app", sdkVersion: "9.9.9", queueFileURL: file,
+            bundleIdentifier: "com.example.app", queueFileURL: file,
             reachabilityFactory: { _ in nil })
         var options = BeaconstatOptions()
         options.flushInterval = 3600
@@ -149,7 +149,7 @@ final class EventIdempotencyTests: XCTestCase {
             store: InMemorySecureStore(),
             clock: SystemClock(dateProvider: { Date(timeIntervalSince1970: 1_776_594_600) }),
             sessionProvider: { _ in .mocked() },
-            bundleIdentifier: "com.example.app", sdkVersion: "9.9.9", queueFileURL: file,
+            bundleIdentifier: "com.example.app", queueFileURL: file,
             reachabilityFactory: { _ in nil })
         var options = BeaconstatOptions()
         options.flushInterval = 3600
