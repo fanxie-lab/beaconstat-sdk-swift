@@ -12,6 +12,8 @@ final class BeaconstatCore {
     private let bundleIdentifier: String
     private let sdkVersion: String
     private let queueFileURL: URL
+    /// Test seam: where `logger` writes. `nil` uses the default stdout sink.
+    private let logSink: ((String) -> Void)?
 
     private var configuration: Configuration?
     private var transport: Transport?
@@ -48,7 +50,8 @@ final class BeaconstatCore {
              return nil
              #endif
          },
-         lifecycleObserver: LifecycleObserver = LifecycleObserver()) {
+         lifecycleObserver: LifecycleObserver = LifecycleObserver(),
+         logSink: ((String) -> Void)? = nil) {
         self.store = store
         self.clock = clock
         self.sessionProvider = sessionProvider
@@ -57,6 +60,13 @@ final class BeaconstatCore {
         self.queueFileURL = queueFileURL
         self.reachabilityFactory = reachabilityFactory
         self.lifecycleObserver = lifecycleObserver
+        self.logSink = logSink
+    }
+
+    private func makeLogger(debugLogging: Bool) -> Logger {
+        let enabled = debugLogging || Self.isDebugBuild
+        guard let logSink else { return Logger(enabled: enabled) }
+        return Logger(enabled: enabled, sink: logSink)
     }
 
     /// Default on-disk location for the persisted event queue.
@@ -73,36 +83,43 @@ final class BeaconstatCore {
                    environment: [String: String]) {
         queue.async {
             // Build a logger up front so opt-out / bad-key diagnostics actually emit.
-            self.logger = Logger(enabled: options.debugLogging || Self.isDebugBuild)
+            self.logger = self.makeLogger(debugLogging: options.debugLogging)
             guard self.store.string(forKey: .optedOut) == nil else {
                 self.logger.debug("opted out — collecting/sending nothing")
                 return
             }
             do {
                 let config = try Configuration(publicKey: publicKey, hmacSecret: hmacSecret, options: options)
+                // Out-of-range numerics are clamped, never rejected (H4) — but
+                // say so, or a host debugging "why isn't it flushing every
+                // second" has nothing to go on.
+                for notice in config.clampNotices { self.logger.debug("options: \(notice)") }
                 self.configuration = config
                 self.environment = environment
                 self.stoppedForAuth = false   // reconfigure recovers from a prior 401
                 self.retryCount = 0
                 self.retryTimer?.cancel()
                 self.retryTimer = nil
+                // Everything below reads `config.options` — the CLAMPED copy —
+                // never the raw `options` the host passed in (H4).
+                let opts = config.options
                 self.routesToTest = TestModeResolver.routesToTest(
-                    options.testMode, isDebug: Self.isDebugBuild, isSimulator: Self.isSimulator,
+                    opts.testMode, isDebug: Self.isDebugBuild, isSimulator: Self.isSimulator,
                     isTestFlight: environment["run_context.is_testflight"] == "true",
-                    routeTestFlightToTest: options.routeTestFlightToTest)
+                    routeTestFlightToTest: opts.routeTestFlightToTest)
                 self.transport = Transport(session: self.sessionProvider(config),
                                            baseURL: config.baseURL, logger: self.logger)
                 // Reuse existing queue/session on reconfigure so an in-flight flush
                 // completion never operates on a replaced queue (same file path).
                 if self.queue_ == nil {
                     self.queue_ = EventQueue(store: FileEventStore(fileURL: self.queueFileURL),
-                                             maxQueued: options.maxQueuedEvents, logger: self.logger)
+                                             maxQueued: opts.maxQueuedEvents, logger: self.logger)
                 }
                 if self.sessionManager == nil {
                     self.sessionManager = SessionManager(store: self.store, clock: self.clock,
-                                                         timeout: options.sessionTimeout)
+                                                         timeout: opts.sessionTimeout)
                 }
-                self.startFlushTimer(interval: options.flushInterval)
+                self.startFlushTimer(interval: opts.flushInterval)
                 if self.reachability == nil {
                     let r = self.reachabilityFactory(self.queue)
                     r?.onReconnect = { [weak self] in self?.queue.async { self?.flushInternal() } }
@@ -237,8 +254,13 @@ final class BeaconstatCore {
 
     private func startFlushTimer(interval: TimeInterval) {
         flushTimer?.cancel()
+        // Belt and braces behind Configuration's clamp (H4): `repeating: 0` here
+        // is a ~345k-fires-per-second runaway, so never trust a bare interval.
+        let safe = min(max(interval.isFinite ? interval : BeaconstatOptions.Limits.flushInterval.lowerBound,
+                           BeaconstatOptions.Limits.flushInterval.lowerBound),
+                       BeaconstatOptions.Limits.flushInterval.upperBound)
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + interval, repeating: interval)
+        timer.schedule(deadline: .now() + safe, repeating: safe)
         timer.setEventHandler { [weak self] in self?.flushInternal() }
         timer.resume()
         flushTimer = timer
