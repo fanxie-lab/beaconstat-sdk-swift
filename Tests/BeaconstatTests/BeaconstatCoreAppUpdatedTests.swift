@@ -6,22 +6,28 @@ final class BeaconstatCoreAppUpdatedTests: XCTestCase {
     override func tearDown() { MockURLProtocol.reset() }
     private let validHmac = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-    private func sentBodies() -> String {
-        MockURLProtocol.capturedRequests.enumerated().compactMap { i, req in
-            req.url!.path.hasSuffix("/events") ? String(data: MockURLProtocol.capturedBodies[i], encoding: .utf8) : nil
-        }.joined()
-    }
+    private func sentBodies() -> String { MockURLProtocol.eventBodies() }
 
+    /// Test gap 11 — this helper created a temp queue file on every invocation
+    /// and never deleted it, unlike every other test file in the suite. Minor as
+    /// a leak, but the asymmetry is exactly what hides state bleed: a helper
+    /// that doesn't clean up is a helper nobody has checked for reuse.
+    /// `makeTemporaryQueueFile()` registers the removal as a teardown block, so
+    /// it cannot be forgotten and it survives an early `XCTFail`.
     private func run(store: SecureStore, env: [String: String]) {
         let c = BeaconstatCore(store: store,
                                clock: SystemClock(dateProvider: { Date(timeIntervalSince1970: 1_776_594_600) }),
                                sessionProvider: { _ in .mocked() },
                                bundleIdentifier: "com.example.app",
-                               queueFileURL: FileManager.default.temporaryDirectory.appendingPathComponent("q-\(UUID()).json"))
+                               queueFileURL: makeTemporaryQueueFile(),
+                               reachabilityFactory: { _ in nil })
         var o = BeaconstatOptions(); o.flushInterval = 3600
         c.configure(publicKey: "bcs_pub_abcdef0123456789", hmacSecret: validHmac, options: o, environment: env)
         let done = expectation(description: "flow"); c.onQuiescent { done.fulfill() }
         wait(for: [done], timeout: 3)
+        // Releases the flush timer and the (mocked) URLSession; the core was
+        // otherwise left running for the rest of the process.
+        c.shutdown()
     }
 
     private func handshake202() {

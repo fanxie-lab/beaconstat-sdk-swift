@@ -28,8 +28,7 @@ final class AppleEntrySanitizationTests: XCTestCase {
                                clock: SystemClock(dateProvider: { Date(timeIntervalSince1970: 1_776_594_600) }),
                                sessionProvider: { _ in .mocked() },
                                bundleIdentifier: "com.example.app",
-                               queueFileURL: FileManager.default.temporaryDirectory
-                                   .appendingPathComponent("q-\(UUID()).json"),
+                               queueFileURL: makeTemporaryQueueFile(),
                                reachabilityFactory: { _ in nil },
                                logSink: { [logs = self.logs] line in logs.append(line) })
         var o = BeaconstatOptions(); o.flushInterval = 3600; o.debugLogging = true

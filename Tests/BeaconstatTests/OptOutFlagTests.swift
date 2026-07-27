@@ -1,75 +1,9 @@
 import XCTest
 @testable import Beaconstat
 
-/// Counts reads and writes per key, so a test can assert the SDK is not going
-/// back to secure storage for a value it already knows (M5).
-final class CountingSecureStore: SecureStore {
-    private let inner = InMemorySecureStore()
-    private let lock = NSLock()
-    private var readCounts: [SecureStoreKey: Int] = [:]
-    private var writeCounts: [SecureStoreKey: Int] = [:]
-
-    func reads(of key: SecureStoreKey) -> Int {
-        lock.lock(); defer { lock.unlock() }
-        return readCounts[key] ?? 0
-    }
-
-    func writes(of key: SecureStoreKey) -> Int {
-        lock.lock(); defer { lock.unlock() }
-        return writeCounts[key] ?? 0
-    }
-
-    func resetCounts() {
-        lock.lock(); defer { lock.unlock() }
-        readCounts = [:]; writeCounts = [:]
-    }
-
-    func string(forKey key: SecureStoreKey) -> String? {
-        lock.lock(); readCounts[key, default: 0] += 1; lock.unlock()
-        return inner.string(forKey: key)
-    }
-
-    @discardableResult
-    func set(_ value: String?, forKey key: SecureStoreKey) -> Bool {
-        lock.lock(); writeCounts[key, default: 0] += 1; lock.unlock()
-        return inner.set(value, forKey: key)
-    }
-}
-
-/// Parks the first write of a chosen key until released, so a test can hold the
-/// core's serial queue in a known place instead of racing it.
-final class GatedSecureStore: SecureStore {
-    private let inner = InMemorySecureStore()
-    private let gatedKey: SecureStoreKey
-    private let entered = DispatchSemaphore(value: 0)
-    private let release = DispatchSemaphore(value: 0)
-    private let lock = NSLock()
-    private var armed = false
-
-    init(gating key: SecureStoreKey) { self.gatedKey = key }
-
-    func arm() { lock.lock(); armed = true; lock.unlock() }
-
-    /// Blocks until the core's queue is parked inside the gated write.
-    func waitUntilEntered() { entered.wait() }
-
-    func releaseGate() { release.signal() }
-
-    func string(forKey key: SecureStoreKey) -> String? { inner.string(forKey: key) }
-
-    @discardableResult
-    func set(_ value: String?, forKey key: SecureStoreKey) -> Bool {
-        lock.lock()
-        let shouldGate = armed && key == gatedKey
-        if shouldGate { armed = false }
-        lock.unlock()
-        if shouldGate {
-            entered.signal()
-            release.wait()
-        }
-        return inner.set(value, forKey: key)
-    }
-}
+// `CountingSecureStore` and `GatedSecureStore` used to live here as
+// file-scoped helpers; they now live in `TestSupport.swift`, because the
+// questions they answer come up all over the suite.
 
 /// M4 — `optOut()` wrote the flag via `queue.async` while the public getter read
 /// secure storage **synchronously on the caller's thread**, so

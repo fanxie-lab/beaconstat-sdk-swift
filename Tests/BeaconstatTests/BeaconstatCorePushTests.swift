@@ -22,7 +22,8 @@ final class BeaconstatCorePushTests: XCTestCase {
                                clock: SystemClock(dateProvider: { Date(timeIntervalSince1970: 1_776_594_600) }),
                                sessionProvider: { _ in .mocked() },
                                bundleIdentifier: "com.example.app",
-                               queueFileURL: FileManager.default.temporaryDirectory.appendingPathComponent("q-\(UUID()).json"))
+                               queueFileURL: makeTemporaryQueueFile(),
+                               reachabilityFactory: { _ in nil })
         var o = BeaconstatOptions(); o.flushInterval = 3600
         c.configure(publicKey: "bcs_pub_abcdef0123456789", hmacSecret: validHmac, options: o, environment: ["device.platform": "ios"])
         return c
