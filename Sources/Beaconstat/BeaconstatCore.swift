@@ -40,6 +40,9 @@ final class BeaconstatCore {
     private let reachabilityFactory: (DispatchQueue) -> Reachability?
     private let lifecycleObserver: LifecycleObserver
     private var lifecycleStarted = false
+    /// Whether the app is currently outside the foreground, so `app_backgrounded`
+    /// fires once per departure even when the OS signals it twice (M3).
+    private var inBackground = false
     private var reportedStoreDegradation = false
     /// How a batch becomes wire bytes. Injectable purely so the encode-failure
     /// path is reachable in a test (L2) — production always uses
@@ -276,6 +279,12 @@ final class BeaconstatCore {
                     self?.queue.async { self?.handleBackgroundActivityExpiry() }
                 })
                 self?.queue.async { self?.handleBackground() }
+            }
+            // macOS only, and no background assertion: losing focus doesn't
+            // start a suspension countdown, and the Mac has no assertion to
+            // take (M3).
+            lifecycleObserver.onResignActive = { [weak self] in
+                self?.queue.async { self?.handleResignActive() }
             }
             lifecycleObserver.onForeground = { [weak self] in
                 self?.queue.async { self?.handleForeground() }
@@ -918,11 +927,33 @@ extension BeaconstatCore {
         holdingBackgroundActivity = true
         defer { endBackgroundActivityIfIdle() }
         guard let config = configuration, !isOptedOut else { return }
-        var props: [String: String] = [:]
-        if let sid = startSessionIfNeeded() { props["_bcs.session.id"] = sid }
-        enqueue(Event(name: "_bcs.apple.app_backgrounded", time: clock.nowISO8601(),
-                      properties: props.isEmpty ? nil : props))
+        // At most one `app_backgrounded` per foreground period. macOS can
+        // signal the transition twice for one departure — hide, then quit —
+        // and a duplicate would double-count sessions (M3).
+        if !inBackground {
+            inBackground = true
+            var props: [String: String] = [:]
+            if let sid = startSessionIfNeeded() { props["_bcs.session.id"] = sid }
+            enqueue(Event(name: "_bcs.apple.app_backgrounded", time: clock.nowISO8601(),
+                          properties: props.isEmpty ? nil : props))
+        }
+        // Still flush on a repeat signal: quitting after hiding is the last
+        // chance this process gets.
         if config.options.flushOnBackground { flushInternal() }
+    }
+
+    /// macOS: the app lost focus (⌘-Tab, another window, Mission Control) but is
+    /// still running.
+    ///
+    /// This used to be mapped to `app_backgrounded`, so an ordinary Mac user
+    /// switching apps 200 times a day produced 200 events on a reserved
+    /// dimension that meant something entirely different from the iOS one (M3).
+    /// The user may not come back, so it is still worth trying to send what has
+    /// accumulated — but only that. With nothing queued, `flushInternal()`
+    /// returns without a request, so an idle app switch costs nothing.
+    private func handleResignActive() {
+        guard let config = configuration, !isOptedOut, config.options.flushOnBackground else { return }
+        flushInternal()
     }
 
     private func handleForeground() {
@@ -930,6 +961,7 @@ extension BeaconstatCore {
         // assertion to survive, and holding one costs the host background time
         // it may want for its own work.
         endBackgroundActivity()
+        inBackground = false
         guard configuration != nil, !isOptedOut else { return }
         startSessionIfNeeded() // resumes: emits session_started only if the timeout was exceeded
     }
