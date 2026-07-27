@@ -41,6 +41,12 @@ final class BeaconstatCore {
     private let lifecycleObserver: LifecycleObserver
     private var lifecycleStarted = false
     private var reportedStoreDegradation = false
+    /// Holds off suspension while a background flush is in flight (H2).
+    /// Internally synchronised, because the assertion is taken on the
+    /// notification thread; the `holdingBackgroundActivity` flag tracking it is
+    /// queue-confined like every other piece of core state.
+    private let backgroundActivity: BackgroundActivity
+    private var holdingBackgroundActivity = false
 
     init(store: SecureStore = LayeredSecureStore(
              primary: KeychainSecureStore(),
@@ -58,7 +64,9 @@ final class BeaconstatCore {
              #endif
          },
          lifecycleObserver: LifecycleObserver = LifecycleObserver(),
+         backgroundActivity: BackgroundActivity = BackgroundActivityFactory.make(),
          logSink: ((String) -> Void)? = nil) {
+        self.backgroundActivity = backgroundActivity
         self.store = store
         self.clock = clock
         self.sessionProvider = sessionProvider
@@ -229,6 +237,14 @@ final class BeaconstatCore {
         }
         if !lifecycleStarted {
             lifecycleObserver.onBackground = { [weak self] in
+                // Take the assertion HERE, on the notification thread, before
+                // hopping onto the serial queue. The OS starts counting down at
+                // the notification, so the hop and the `app_backgrounded`
+                // enqueue would otherwise be spent from a ~5 s budget (H2).
+                // `begin` is idempotent and internally synchronised.
+                self?.backgroundActivity.begin(expiration: { [weak self] in
+                    self?.queue.async { self?.handleBackgroundActivityExpiry() }
+                })
                 self?.queue.async { self?.handleBackground() }
             }
             lifecycleObserver.onForeground = { [weak self] in
@@ -257,6 +273,33 @@ final class BeaconstatCore {
             lifecycleObserver.stop()
             lifecycleStarted = false
         }
+        endBackgroundActivity()
+    }
+
+    // MARK: - Background assertion (H2)
+
+    /// Releases the assertion once nothing is in flight. Called from every
+    /// network completion, so the process is held for exactly as long as a
+    /// background flush actually needs and not a moment longer.
+    private func endBackgroundActivityIfIdle() {
+        guard holdingBackgroundActivity, !flushing, outstandingNetworkOps == 0 else { return }
+        endBackgroundActivity()
+    }
+
+    private func endBackgroundActivity() {
+        guard holdingBackgroundActivity else { return }
+        holdingBackgroundActivity = false
+        backgroundActivity.end()
+    }
+
+    /// The OS reclaimed the time before the flush finished. Nothing to undo:
+    /// the batch is still on disk because it was never acknowledged, so it
+    /// replays on the next launch instead of being lost.
+    private func handleBackgroundActivityExpiry() {
+        guard holdingBackgroundActivity else { return }
+        holdingBackgroundActivity = false
+        logger.debug("background time expired with a send still in flight — the batch stays "
+                     + "queued and will be resent")
     }
 
     /// `URLSession` retains itself until invalidated. `finishTasksAndInvalidate`
@@ -318,6 +361,7 @@ final class BeaconstatCore {
                 guard let self else { return }
                 self.outstandingNetworkOps -= 1
                 self.handshaking = false
+                defer { self.endBackgroundActivityIfIdle() }
                 guard !self.isOptedOut else { return } // opted out mid-handshake
                 switch result {
                 case .success(let resp):
@@ -343,99 +387,6 @@ final class BeaconstatCore {
         }
     }
 
-    // MARK: - Queue + flush (M4)
-
-    private func enqueue(_ event: Event) {
-        guard !isOptedOut else { return }
-        queue_?.enqueue(event)
-        if let count = queue_?.count, let size = configuration?.options.batchSize, count >= size {
-            flushInternal()
-        }
-    }
-
-    func flush() { queue.async { self.flushInternal() } }
-
-    private func startFlushTimer(interval: TimeInterval) {
-        flushTimer?.cancel()
-        // Belt and braces behind Configuration's clamp (H4): `repeating: 0` here
-        // is a ~345k-fires-per-second runaway, so never trust a bare interval.
-        let safe = min(max(interval.isFinite ? interval : BeaconstatOptions.Limits.flushInterval.lowerBound,
-                           BeaconstatOptions.Limits.flushInterval.lowerBound),
-                       BeaconstatOptions.Limits.flushInterval.upperBound)
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + safe, repeating: safe)
-        timer.setEventHandler { [weak self] in self?.flushInternal() }
-        timer.resume()
-        flushTimer = timer
-    }
-
-    /// Sends one batch (≤100). One in-flight flush at a time.
-    private func flushInternal() {
-        guard !flushing, !stoppedForAuth, !isOptedOut,
-              let config = configuration, let transport = transport,
-              let queue_ = queue_ else { return }
-        guard let siteToken = siteToken else {
-            // No token: this launch's handshake failed, or hasn't happened yet.
-            // Re-handshake on *this* trigger — the periodic timer, reconnect, the
-            // retry backoff, a batch-size trip — instead of silently giving up
-            // for the rest of the process, which is what C1 described. Only when
-            // there is something to send: an idle offline app shouldn't poll.
-            if !queue_.isEmpty { requestHandshake() }
-            return
-        }
-        let batch = queue_.dequeueBatch(max: 100)
-        guard !batch.isEmpty else { return }
-        let body = EventBatch(productVersion: config.options.productVersionOrDefault,
-                              environment: environment, events: batch)
-        guard let bodyData = try? PayloadEncoder.encode(body) else { return }
-        let timestamp = clock.nowISO8601()
-        let signature = Signer.sign(body: bodyData, publicKey: config.publicKey,
-                                    hmacSecret: config.hmacSecret, timestamp: timestamp)
-        flushing = true
-        outstandingNetworkOps += 1
-        transport.sendBatch(bodyData: bodyData, apiKey: config.publicKey, siteToken: siteToken,
-                            signature: signature, timestamp: timestamp, isTest: routesToTest) { [weak self] result in
-            self?.queue.async {
-                guard let self else { return }
-                self.outstandingNetworkOps -= 1
-                self.flushing = false
-                guard !self.isOptedOut else { return } // opted out mid-flight -> discard this batch
-                switch result {
-                case .success:
-                    self.retryCount = 0
-                    self.retryTimer?.cancel(); self.retryTimer = nil
-                    if let count = self.queue_?.count, count > 0 { self.flushInternal() } // drain
-                case .failure(.badRequest):
-                    self.logger.debug("batch rejected (400) — dropping poison batch")
-                    self.retryCount = 0
-                    if let count = self.queue_?.count, count > 0 { self.flushInternal() }
-                case .failure(.unauthorized):
-                    self.logger.debug("unauthorized — requeueing and halting until reconfigured")
-                    self.queue_?.prepend(batch)
-                    self.stoppedForAuth = true
-                case .failure(let e):
-                    self.logger.debug("flush failed (\(e)) — requeueing for retry")
-                    self.queue_?.prepend(batch)
-                    self.scheduleRetry()
-                }
-            }
-        }
-    }
-
-    private func scheduleRetry() {
-        guard let maxRetries = configuration?.options.maxRetries else { return }
-        retryCount += 1
-        guard let delay = RetryPolicy.delay(forAttempt: retryCount, maxRetries: maxRetries) else {
-            retryCount = 0 // give up this round; periodic timer / next event / reconnect will retry
-            return
-        }
-        retryTimer?.cancel()
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + delay)
-        timer.setEventHandler { [weak self] in self?.flushInternal() }
-        timer.resume()
-        retryTimer = timer
-    }
 
     // MARK: - Run context
 
@@ -617,6 +568,131 @@ final class BeaconstatCore {
     #endif
 }
 
+// MARK: - Delivery: batching, sending, acknowledging, retrying
+
+/// Split into an extension so the orchestrator stays inside its
+/// `type_body_length` budget. Kept in this file so the core's `private` state
+/// stays private. Everything here runs on the core's serial queue, called only
+/// from code already on it.
+extension BeaconstatCore {
+    private func enqueue(_ event: Event) {
+        guard !isOptedOut else { return }
+        queue_?.enqueue(event)
+        if let count = queue_?.count, let size = configuration?.options.batchSize, count >= size {
+            flushInternal()
+        }
+    }
+
+    func flush() { queue.async { self.flushInternal() } }
+
+    private func startFlushTimer(interval: TimeInterval) {
+        flushTimer?.cancel()
+        // Belt and braces behind Configuration's clamp (H4): `repeating: 0` here
+        // is a ~345k-fires-per-second runaway, so never trust a bare interval.
+        let safe = min(max(interval.isFinite ? interval : BeaconstatOptions.Limits.flushInterval.lowerBound,
+                           BeaconstatOptions.Limits.flushInterval.lowerBound),
+                       BeaconstatOptions.Limits.flushInterval.upperBound)
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + safe, repeating: safe)
+        timer.setEventHandler { [weak self] in self?.flushInternal() }
+        timer.resume()
+        flushTimer = timer
+    }
+
+    /// Sends one batch (≤100). One in-flight flush at a time.
+    private func flushInternal() {
+        guard !flushing, !stoppedForAuth, !isOptedOut,
+              let config = configuration, let transport = transport,
+              let queue_ = queue_ else { return }
+        guard let siteToken = siteToken else {
+            // No token: this launch's handshake failed, or hasn't happened yet.
+            // Re-handshake on *this* trigger — the periodic timer, reconnect, the
+            // retry backoff, a batch-size trip — instead of silently giving up
+            // for the rest of the process, which is what C1 described. Only when
+            // there is something to send: an idle offline app shouldn't poll.
+            if !queue_.isEmpty { requestHandshake() }
+            return
+        }
+        // Select, encode and sign BEFORE committing to the batch (L2). The old
+        // order dequeued first and bailed on an encode failure, silently
+        // destroying the batch it had just removed from disk.
+        let batch = queue_.nextBatch(max: EventQueue.maxEventsPerBatch)
+        guard !batch.isEmpty else { return }
+        let body = EventBatch(productVersion: config.options.productVersionOrDefault,
+                              environment: environment, events: batch)
+        guard let bodyData = try? PayloadEncoder.encode(body) else {
+            logger.debug("could not encode a batch of \(batch.count) event(s) — leaving it queued")
+            return
+        }
+        let timestamp = clock.nowISO8601()
+        // Sign the exact bytes that will be transmitted; Transport never
+        // re-encodes. Do not move either of these across the other.
+        let signature = Signer.sign(body: bodyData, publicKey: config.publicKey,
+                                    hmacSecret: config.hmacSecret, timestamp: timestamp)
+        // Now the batch is definitely going out: mark it in flight. This writes
+        // nothing — the events stay on disk until the server acknowledges them,
+        // so a suspension or crash from here on replays rather than loses (H2).
+        queue_.checkout(batch.count)
+        flushing = true
+        outstandingNetworkOps += 1
+        transport.sendBatch(bodyData: bodyData, apiKey: config.publicKey, siteToken: siteToken,
+                            signature: signature, timestamp: timestamp, isTest: routesToTest) { [weak self] result in
+            self?.queue.async {
+                guard let self else { return }
+                self.outstandingNetworkOps -= 1
+                self.flushing = false
+                // Opted out mid-flight: `optOut()`'s purge is ordered ahead of
+                // this on the same serial queue and already cleared the
+                // in-flight batch, so there is nothing to acknowledge.
+                guard !self.isOptedOut else { self.endBackgroundActivityIfIdle(); return }
+                self.handleFlushResult(result)
+                self.endBackgroundActivityIfIdle()
+            }
+        }
+    }
+
+    /// Runs on the serial queue, with the batch still marked in flight.
+    /// Every path must either `acknowledge()` (gone for good) or `release()`
+    /// (selectable again) — leaving it marked would wedge the queue.
+    private func handleFlushResult(_ result: Result<Void, TransportError>) {
+        switch result {
+        case .success:
+            queue_?.acknowledge()
+            retryCount = 0
+            retryTimer?.cancel(); retryTimer = nil
+            if let pending = queue_?.pendingCount, pending > 0 { flushInternal() } // drain
+        case .failure(.badRequest):
+            logger.debug("batch rejected (400) — dropping poison batch")
+            queue_?.acknowledge()
+            retryCount = 0
+            if let pending = queue_?.pendingCount, pending > 0 { flushInternal() }
+        case .failure(.unauthorized):
+            logger.debug("unauthorized — requeueing and halting until reconfigured")
+            queue_?.release()
+            stoppedForAuth = true
+        case .failure(let error):
+            logger.debug("flush failed (\(error)) — requeueing for retry")
+            queue_?.release()
+            scheduleRetry()
+        }
+    }
+
+    private func scheduleRetry() {
+        guard let maxRetries = configuration?.options.maxRetries else { return }
+        retryCount += 1
+        guard let delay = RetryPolicy.delay(forAttempt: retryCount, maxRetries: maxRetries) else {
+            retryCount = 0 // give up this round; periodic timer / next event / reconnect will retry
+            return
+        }
+        retryTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + delay)
+        timer.setEventHandler { [weak self] in self?.flushInternal() }
+        timer.resume()
+        retryTimer = timer
+    }
+}
+
 // MARK: - Session lifecycle + exactly-once launch events
 
 /// Split into an extension so the orchestrator stays inside its
@@ -700,6 +776,11 @@ extension BeaconstatCore {
     }
 
     private func handleBackground() {
+        // The observer already took a background assertion; adopt it here so
+        // the queue-confined flag matches reality, and release it on the way
+        // out unless a send is actually in flight (H2).
+        holdingBackgroundActivity = true
+        defer { endBackgroundActivityIfIdle() }
         guard let config = configuration, !isOptedOut else { return }
         var props: [String: String] = [:]
         if let sid = startSessionIfNeeded() { props["_bcs.session.id"] = sid }
@@ -709,6 +790,10 @@ extension BeaconstatCore {
     }
 
     private func handleForeground() {
+        // Back in the foreground: whatever is in flight no longer needs an
+        // assertion to survive, and holding one costs the host background time
+        // it may want for its own work.
+        endBackgroundActivity()
         guard configuration != nil, !isOptedOut else { return }
         startSessionIfNeeded() // resumes: emits session_started only if the timeout was exceeded
     }

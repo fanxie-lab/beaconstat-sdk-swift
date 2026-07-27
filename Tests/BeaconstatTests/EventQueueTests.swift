@@ -35,58 +35,50 @@ final class EventQueueTests: XCTestCase {
         let q = EventQueue(store: store, maxQueued: 3, logger: log())
         for i in 1...5 { q.enqueue(ev(i)) }
         XCTAssertEqual(q.count, 3)
-        XCTAssertEqual(q.peekBatch(max: 100), [ev(3), ev(4), ev(5)]) // oldest dropped
+        XCTAssertEqual(q.nextBatch(max: 100), [ev(3), ev(4), ev(5)]) // oldest dropped
     }
 
-    func testPeekBatchCapsAt100() {
+    func testNextBatchCapsAtTheServersHundredEventLimit() {
         let store = MemStore()
         let q = EventQueue(store: store, maxQueued: 1000, logger: log())
         for i in 1...150 { q.enqueue(ev(i)) }
-        XCTAssertEqual(q.peekBatch(max: 100).count, 100)
+        XCTAssertEqual(q.nextBatch(max: 1000).count, EventQueue.maxEventsPerBatch)
     }
 
-    func testRemoveFirstDropsSentPrefixAndPersists() {
-        let store = MemStore()
-        let q = EventQueue(store: store, maxQueued: 500, logger: log())
-        for i in 1...5 { q.enqueue(ev(i)) }
-        q.removeFirst(2)
-        XCTAssertEqual(q.peekBatch(max: 100), [ev(3), ev(4), ev(5)])
-        XCTAssertEqual(store.events, [ev(3), ev(4), ev(5)])
-    }
-
-    func testPeekBatchNegativeMaxReturnsEmpty() {
+    func testNextBatchNegativeMaxReturnsEmpty() {
         let store = MemStore()
         let q = EventQueue(store: store, maxQueued: 500, logger: log())
         q.enqueue(ev(1))
         q.enqueue(ev(2))
-        XCTAssertEqual(q.peekBatch(max: -1), [])
+        XCTAssertEqual(q.nextBatch(max: -1), [])
     }
 
-    func testDequeueBatchRemovesAndReturnsFront() {
+    func testNextBatchDoesNotMutate() {
         let store = MemStore()
         let q = EventQueue(store: store, maxQueued: 500, logger: log())
         for i in 1...5 { q.enqueue(ev(i)) }
-        let batch = q.dequeueBatch(max: 2)
-        XCTAssertEqual(batch, [ev(1), ev(2)])
-        XCTAssertEqual(q.peekBatch(max: 100), [ev(3), ev(4), ev(5)])
-        XCTAssertEqual(store.events, [ev(3), ev(4), ev(5)]) // persisted
+        XCTAssertEqual(q.nextBatch(max: 2), [ev(1), ev(2)])
+        XCTAssertEqual(q.nextBatch(max: 2), [ev(1), ev(2)], "selection is idempotent until checkout")
+        XCTAssertEqual(q.count, 5)
     }
 
-    func testPrependRestoresOrderAtFront() {
+    func testCheckoutThenAcknowledgeDropsTheSentPrefixAndPersists() {
         let store = MemStore()
         let q = EventQueue(store: store, maxQueued: 500, logger: log())
-        for i in 3...5 { q.enqueue(ev(i)) }
-        q.prepend([ev(1), ev(2)])
-        XCTAssertEqual(q.peekBatch(max: 100), [ev(1), ev(2), ev(3), ev(4), ev(5)])
-        XCTAssertEqual(store.events.first, ev(1))
+        for i in 1...5 { q.enqueue(ev(i)) }
+        q.checkout(2)
+        q.acknowledge()
+        XCTAssertEqual(q.nextBatch(max: 100), [ev(3), ev(4), ev(5)])
+        XCTAssertEqual(store.events, [ev(3), ev(4), ev(5)])
     }
 
-    func testPrependBeyondCapDropsOldest() {
+    func testSetMaxQueuedEnforcesTheNewCapImmediately() {
         let store = MemStore()
-        let q = EventQueue(store: store, maxQueued: 3, logger: log())
-        for i in 4...6 { q.enqueue(ev(i)) }        // queue = [4,5,6]
-        q.prepend([ev(1), ev(2)])                  // [1,2,4,5,6] -> cap 3 -> drop 1,2 -> [4,5,6]
-        XCTAssertEqual(q.peekBatch(max: 100), [ev(4), ev(5), ev(6)])
+        let q = EventQueue(store: store, maxQueued: 500, logger: log())
+        for i in 1...5 { q.enqueue(ev(i)) }
+        q.setMaxQueued(2)
+        XCTAssertEqual(q.count, 2)
+        XCTAssertEqual(store.events, [ev(4), ev(5)])
     }
 
     func testClearEmptiesAndPersists() {
