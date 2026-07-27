@@ -199,9 +199,21 @@ struct EnvironmentCollector {
         #endif
     }
 
+    /// `Locale.characterDirection(forLanguage:)` is deprecated in favour of
+    /// `Locale.Language.characterDirection`, which needs iOS 16 / macOS 13 /
+    /// tvOS 16 / watchOS 9 — above this package's floor, but *below* visionOS 1,
+    /// so building for visionOS surfaced the deprecation as a warning while the
+    /// other platforms stayed silent. Branch rather than suppress: adopters on
+    /// iOS 15 keep working, and everyone else uses the supported API.
     static func layoutDirection(language: String?) -> String {
         let lang = language ?? Locale.current.identifier
-        return Locale.characterDirection(forLanguage: lang) == .rightToLeft ? "rtl" : "ltr"
+        let direction: Locale.LanguageDirection
+        if #available(iOS 16.0, macOS 13.0, tvOS 16.0, watchOS 9.0, visionOS 1.0, *) {
+            direction = Locale.Language(identifier: lang).characterDirection
+        } else {
+            direction = Locale.characterDirection(forLanguage: lang)
+        }
+        return direction == .rightToLeft ? "rtl" : "ltr"
     }
 
     // MARK: - accessibility.*
@@ -332,8 +344,20 @@ struct EnvironmentCollector {
 
     /// Main-thread-only (`UIScreen.main`) — see `colorScheme()` for why it
     /// isn't `@MainActor`.
+    ///
+    /// **visionOS reports nothing, deliberately.** `UIScreen` is
+    /// `API_UNAVAILABLE(visionos)`, so this did not merely return a wrong value
+    /// there — the SDK **did not compile for visionOS at all**, while the README
+    /// and CHANGELOG advertised it and `Package.swift` didn't declare it, so
+    /// nothing ever tried (L9). There is also no sensible value to report: a
+    /// visionOS app has no screen, it has one or more volumes and windows the
+    /// user resizes and moves in space, and `device.screen_*` would be a
+    /// fabrication. Omitting the keys is the honest answer, and the wire format
+    /// already treats them as optional.
     static func screenMetrics() -> ScreenMetrics? {
-        #if canImport(UIKit) && !os(watchOS)
+        #if os(visionOS)
+        return nil
+        #elseif canImport(UIKit) && !os(watchOS)
         let screen = UIScreen.main
         let bounds = screen.bounds
         let width = Int(bounds.width.rounded())

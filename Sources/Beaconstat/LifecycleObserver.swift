@@ -100,15 +100,17 @@ final class LifecycleObserver: @unchecked Sendable {
             (NSApplication.didBecomeActiveNotification, .foreground),
         ]
         #elseif os(watchOS)
-        if #available(watchOS 7.0, *) {
-            return [
-                (WKExtension.applicationDidEnterBackgroundNotification, .background),
-                (WKExtension.applicationWillEnterForegroundNotification, .foreground),
-            ]
-        }
-        // watchOS 6 and earlier expose no lifecycle notifications, only
-        // `WKExtensionDelegate` callbacks the SDK cannot reach from a library.
-        return []
+        // No `#available(watchOS 7.0, *)`: `Package.swift` now declares
+        // `.watchOS(.v8)` (L9), so the check could never fail — and its
+        // `return []` fallback was worse than dead code. A platform that returns
+        // no transitions has no `app_backgrounded` and no foreground session
+        // resume, silently, which is exactly the bug L9 describes. Removing the
+        // branch removes the only way `transitions()` can be empty on a declared
+        // platform, and `LifecycleObserverTests` asserts that per platform.
+        return [
+            (WKExtension.applicationDidEnterBackgroundNotification, .background),
+            (WKExtension.applicationWillEnterForegroundNotification, .foreground),
+        ]
         #else
         return []
         #endif

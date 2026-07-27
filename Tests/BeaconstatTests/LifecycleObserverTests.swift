@@ -77,7 +77,7 @@ final class LifecycleObserverTests: XCTestCase {
     #endif
 
     #if os(watchOS)
-    @available(watchOS 7.0, *)
+    // No `@available(watchOS 7.0, *)`: the package declares watchOS 8 (L9).
     func testWatchKitMapsEnterBackgroundAndEnterForeground() {
         let observer = LifecycleObserver()
         observer.start(); defer { observer.stop() }
