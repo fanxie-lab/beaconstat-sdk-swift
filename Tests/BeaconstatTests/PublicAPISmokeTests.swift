@@ -1,6 +1,10 @@
 import XCTest
 @testable import Beaconstat
 
+/// `@MainActor` because `Beaconstat.configure` is (M1). This class doubles as
+/// the compile-time witness that the documented call site — a main-actor context
+/// such as `App.init` — still works.
+@MainActor
 final class PublicAPISmokeTests: XCTestCase {
     func testPublicAPIIsCallableAndDoesNotCrash() {
         var options = BeaconstatOptions()

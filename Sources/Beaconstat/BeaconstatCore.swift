@@ -91,14 +91,28 @@ final class BeaconstatCore {
 
     // MARK: - Public entry points (hop onto the serial queue)
 
+    /// - Parameters:
+    ///   - environment: wire keys already collected by the caller, on main.
+    ///     Wins any collision with `deferredEnvironment`.
+    ///   - deferredEnvironment: the rest of the snapshot, evaluated here on the
+    ///     serial queue so it never costs main-thread time at launch (M6). It
+    ///     runs at the top of this block, so routing and the handshake always
+    ///     see the merged snapshot.
     func configure(publicKey: String, hmacSecret: String, options: BeaconstatOptions,
-                   environment: [String: String]) {
+                   environment: [String: String],
+                   deferredEnvironment: (() -> [String: String])? = nil) {
         queue.async {
             // Build a logger up front so opt-out / bad-key diagnostics actually emit.
             self.logger = self.makeLogger(debugLogging: options.debugLogging)
             guard self.store.string(forKey: .optedOut) == nil else {
                 self.logger.debug("opted out — collecting/sending nothing")
                 return
+            }
+            // Finish the snapshot before anything reads it: routing consumes
+            // `run_context.is_testflight`, which lives in the deferred half.
+            var environment = environment
+            if let deferredEnvironment {
+                environment.merge(deferredEnvironment()) { eager, _ in eager }
             }
             do {
                 let config = try Configuration(publicKey: publicKey, hmacSecret: hmacSecret, options: options)

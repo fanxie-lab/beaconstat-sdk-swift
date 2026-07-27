@@ -7,23 +7,40 @@ import Foundation
 public enum Beaconstat {
     /// Configure the SDK. `hmacSecret` is the 64-char hex signing secret
     /// (NOT the `bcs_sec_…` key). Never throws into the host.
+    ///
+    /// Must be called on the main thread — hence `@MainActor`. It snapshots
+    /// main-thread-only UI state (`UIScreen.main`, `UITraitCollection.current`,
+    /// `UIAccessibility`), which off main yields defaults for `device.screen_*`,
+    /// `device.orientation`, `user_preference.color_scheme` and every
+    /// `accessibility.*` key. Call it from `App.init`, `didFinishLaunching`, or
+    /// any other main-actor context.
+    @MainActor
     public static func configure(publicKey: String, hmacSecret: String) {
         configure(publicKey: publicKey, hmacSecret: hmacSecret, options: BeaconstatOptions())
     }
 
+    /// Configure the SDK with explicit options. Main-thread-only — see
+    /// `configure(publicKey:hmacSecret:)`.
+    @MainActor
     public static func configure(publicKey: String, hmacSecret: String, options: BeaconstatOptions) {
-        // Snapshot environment + app version on the CALLER's thread (App init = main),
-        // so UIKit state is never read from the core's serial background queue.
         var opts = options
         let bundle = Bundle.main
         let appVersion = bundle.infoDictionary?["CFBundleShortVersionString"] as? String
         let appBuild = bundle.infoDictionary?["CFBundleVersion"] as? String
         if opts.productVersion == nil { opts.productVersion = appVersion }
-        let environment = EnvironmentCollector(sdkVersion: BeaconstatVersion.current,
-                                               appVersion: appVersion, appBuild: appBuild,
-                                               collectAccessibility: opts.collectAccessibility).collect()
+        let collector = EnvironmentCollector(sdkVersion: BeaconstatVersion.current,
+                                             appVersion: appVersion, appBuild: appBuild,
+                                             collectAccessibility: opts.collectAccessibility)
+        // Only the genuinely main-bound reads happen here. Everything else —
+        // `sysctlbyname`, the App Store receipt URL, `Locale`, `TimeZone` — is
+        // handed to the core as a closure and collected on its serial queue,
+        // strictly before routing and the handshake read it, so it leaves the
+        // launch critical path without racing anything (M6).
+        let mainThreadEnvironment = EnvironmentCollector
+            .collectMainThreadOnly(collectAccessibility: opts.collectAccessibility)
         BeaconstatCore.shared.configure(publicKey: publicKey, hmacSecret: hmacSecret,
-                                        options: opts, environment: environment)
+                                        options: opts, environment: mainThreadEnvironment,
+                                        deferredEnvironment: { collector.collectDeferrable() })
     }
 
     /// Track a custom event. Property values are strings.

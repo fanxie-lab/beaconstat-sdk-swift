@@ -1,6 +1,9 @@
 import XCTest
 @testable import Beaconstat
 
+/// `@MainActor` because `collect()` is (M1) — it reads `UIScreen.main`,
+/// `UITraitCollection.current` and the `UIAccessibility` flags.
+@MainActor
 final class EnvironmentCollectorTests: XCTestCase {
     private func env(collectAccessibility: Bool = true,
                      appVersion: String? = nil,

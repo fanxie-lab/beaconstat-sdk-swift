@@ -21,15 +21,52 @@ struct EnvironmentCollector {
         self.collectAccessibility = collectAccessibility
     }
 
+    /// The complete snapshot.
+    ///
+    /// `@MainActor` because part of it is main-thread-only UI state (M1). Prefer
+    /// `collectMainThreadOnly()` + `collectDeferrable()` on the launch path, so
+    /// only the UI reads pay for being on main (M6).
+    @MainActor
     func collect() -> [String: String] {
+        var env = collectDeferrable()
+        env.merge(Self.collectMainThreadOnly(collectAccessibility: collectAccessibility)) { _, new in new }
+        return env
+    }
+
+    /// The half that MUST be read on the main thread: `UIScreen.main`,
+    /// `UITraitCollection.current`, and the `UIAccessibility` /
+    /// `NSWorkspace` accessibility flags.
+    ///
+    /// Reading these off main trips the Main Thread Checker and yields defaults,
+    /// so `device.screen_*`, `device.orientation`,
+    /// `user_preference.color_scheme` and every `accessibility.*` key silently
+    /// go wrong (M1). Cheap — these are property reads, not syscalls — so it
+    /// stays synchronous on the launch path.
+    @MainActor
+    static func collectMainThreadOnly(collectAccessibility: Bool) -> [String: String] {
+        var d: [String: String] = [:]
+        if let screen = screenMetrics() {
+            d["device.screen_width"] = String(screen.width)
+            d["device.screen_height"] = String(screen.height)
+            d["device.screen_scale"] = String(screen.scale)
+            if let orientation = screen.orientation { d["device.orientation"] = orientation }
+        }
+        d["user_preference.color_scheme"] = colorScheme()
+        if collectAccessibility {
+            d.merge(accessibilityKeys()) { _, new in new }
+        }
+        return d
+    }
+
+    /// The half that is safe — and at launch much better — off the main thread:
+    /// `sysctlbyname`, the App Store receipt URL, `Locale`, `TimeZone`,
+    /// `ProcessInfo`, and the compile-time keys (M6).
+    func collectDeferrable() -> [String: String] {
         var env: [String: String] = [:]
         env.merge(deviceKeys()) { _, new in new }
         env.merge(sdkKeys()) { _, new in new }
         env.merge(runContextKeys()) { _, new in new }
         env.merge(appAndLocaleKeys()) { _, new in new }
-        if collectAccessibility {
-            env.merge(accessibilityKeys()) { _, new in new }
-        }
         return env
     }
 
@@ -44,12 +81,6 @@ struct EnvironmentCollector {
         d["device.os_version"] = Self.osVersionString(version)
         d["device.system_major_version"] = String(version.majorVersion)
         d["device.architecture"] = Self.architecture
-        if let screen = Self.screenMetrics() {
-            d["device.screen_width"] = String(screen.width)
-            d["device.screen_height"] = String(screen.height)
-            d["device.screen_scale"] = String(screen.scale)
-            if let orientation = screen.orientation { d["device.orientation"] = orientation }
-        }
         return d
     }
 
@@ -120,7 +151,8 @@ struct EnvironmentCollector {
         let (language, region) = Self.languageAndRegion()
         if let language { d["user_preference.language"] = language }
         if let region { d["user_preference.region"] = region }
-        d["user_preference.color_scheme"] = Self.colorScheme()
+        // `user_preference.color_scheme` lives in the main-thread half —
+        // `UITraitCollection.current` is main-only.
         d["user_preference.layout_direction"] = Self.layoutDirection(language: language)
         return d
     }
@@ -134,6 +166,7 @@ struct EnvironmentCollector {
         }
     }
 
+    @MainActor
     static func colorScheme() -> String {
         #if canImport(UIKit) && !os(watchOS)
         return UITraitCollection.current.userInterfaceStyle == .dark ? "dark" : "light"
@@ -152,7 +185,8 @@ struct EnvironmentCollector {
 
     // MARK: - accessibility.*
 
-    private func accessibilityKeys() -> [String: String] {
+    @MainActor
+    private static func accessibilityKeys() -> [String: String] {
         var d: [String: String] = [:]
         #if canImport(UIKit) && !os(watchOS)
         d["accessibility.bold_text"] = UIAccessibility.isBoldTextEnabled ? "true" : "false"
@@ -268,6 +302,7 @@ struct EnvironmentCollector {
 
     struct ScreenMetrics { let width: Int; let height: Int; let scale: Int; let orientation: String? }
 
+    @MainActor
     static func screenMetrics() -> ScreenMetrics? {
         #if canImport(UIKit) && !os(watchOS)
         let screen = UIScreen.main
