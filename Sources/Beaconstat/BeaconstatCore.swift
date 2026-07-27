@@ -19,6 +19,9 @@ final class BeaconstatCore {
     private var transport: Transport?
     private var logger = Logger(enabled: false, sink: { _ in })
     private var siteToken: String?
+    /// At most one handshake in flight, so the many flush triggers that can now
+    /// ask for one collapse into a single request (C1).
+    private var handshaking = false
     private var environment: [String: String] = [:]
     private var routesToTest = false
     private var queue_: EventQueue?
@@ -122,6 +125,11 @@ final class BeaconstatCore {
                 for notice in config.clampNotices { self.logger.debug("options: \(notice)") }
                 self.configuration = config
                 self.environment = environment
+                // Read back the token persisted by an earlier successful
+                // handshake. Nothing used to read this key, so a launch with no
+                // connectivity disabled the SDK for the whole run even though
+                // the credential to keep sending was sitting in the store (C1).
+                self.siteToken = self.store.string(forKey: .siteToken)
                 self.stoppedForAuth = false   // reconfigure recovers from a prior 401
                 self.retryCount = 0
                 self.retryTimer?.cancel()
@@ -176,8 +184,8 @@ final class BeaconstatCore {
     // MARK: - Handshake + install (M3)
 
     private func performHandshakeAndInstall() {
-        guard let config = configuration, let transport = transport else { return }
-        guard let installId = Fingerprint.installId(store: store) else {
+        guard configuration != nil, transport != nil, !isOptedOut else { return }
+        guard Fingerprint.installId(store: store) != nil else {
             // No durable install id: the Keychain refused the write and no
             // on-disk mirror accepted it either. Handshaking now would register a
             // fingerprint that changes on the next launch — one install counted
@@ -189,8 +197,34 @@ final class BeaconstatCore {
             return
         }
         reportStoreDegradation()
+        // Enqueue the launch events BEFORE the network call, not in its success
+        // branch. They used to be stranded behind handshake success, so an
+        // offline launch never even recorded `session_started`,
+        // `install_detected` or `app_updated` — they were lost outright rather
+        // than waiting on disk for a flush that works (C1).
+        startSessionThenInstall()
+        requestHandshake(force: true)
+    }
+
+    /// Obtains a site token.
+    ///
+    /// Safe to call from any flush trigger: at most one handshake is in flight,
+    /// and without `force` it is a no-op while a token is already held. This is
+    /// what makes a launch-time failure recoverable — previously the handshake
+    /// ran exactly once per `configure()`, so a single failure disabled the SDK
+    /// for the entire process (C1).
+    ///
+    /// - Parameter force: the once-per-`configure()` handshake, which runs even
+    ///   with a cached token so server time is synced and the fingerprint is
+    ///   re-registered.
+    private func requestHandshake(force: Bool = false) {
+        guard !handshaking, !stoppedForAuth, !isOptedOut,
+              force || siteToken == nil,
+              let config = configuration, let transport = transport,
+              let installId = Fingerprint.installId(store: store) else { return }
         let fingerprint = Fingerprint.compute(bundleIdentifier: bundleIdentifier, installId: installId)
         let environmentType = routesToTest ? "development" : "production"
+        handshaking = true
         outstandingNetworkOps += 1
         transport.handshake(apiKey: config.publicKey, fingerprint: fingerprint,
                             productVersion: config.options.productVersionOrDefault,
@@ -198,106 +232,30 @@ final class BeaconstatCore {
             self?.queue.async {
                 guard let self else { return }
                 self.outstandingNetworkOps -= 1
+                self.handshaking = false
+                guard !self.isOptedOut else { return } // opted out mid-handshake
                 switch result {
                 case .success(let resp):
                     self.siteToken = resp.siteToken
                     self.store.set(resp.siteToken, forKey: .siteToken)
                     self.clock.applyServerTime(resp.serverTime)
-                    self.startSessionThenInstall()
+                    self.retryCount = 0
+                    self.retryTimer?.cancel(); self.retryTimer = nil
+                    // A token just arrived: send whatever accumulated while there
+                    // wasn't one. Without this the token would sit unused until
+                    // the next trigger — 4 hours away in Release.
+                    self.flushInternal()
+                case .failure(.unauthorized):
+                    // Bad key. Retrying cannot help, and `configure()` clears it.
+                    self.logger.debug("handshake unauthorized — halting until reconfigured")
+                    self.stoppedForAuth = true
                 case .failure(let error):
-                    self.logger.debug("handshake failed: \(error)")
+                    self.logger.debug("handshake failed (\(error)) — will retry on backoff, "
+                                      + "the periodic flush, reconnect, or the next batch")
+                    self.scheduleRetry()
                 }
             }
         }
-    }
-
-    private func startSessionThenInstall() {
-        startSessionIfNeeded()
-        checkAppUpdate()
-        emitInstallDetectedIfNeeded()
-    }
-
-    /// Starts a new session if needed (emitting `_bcs.session_started`), and
-    /// returns the current session id (existing or newly-started).
-    @discardableResult
-    private func startSessionIfNeeded() -> String? {
-        guard let sessionManager else { return nil }
-        if let start = sessionManager.startIfNeeded() {
-            var props: [String: String] = ["_bcs.session.id": start.id]
-            if start.isFirst { props["_bcs.is_first_session"] = "true" }
-            if let prev = start.previousAt { props["_bcs.previous_session_at"] = prev }
-            enqueue(Event(name: "_bcs.session_started", time: clock.nowISO8601(), properties: props))
-        }
-        return sessionManager.currentSessionId()
-    }
-
-    /// Reports degraded secure storage exactly once per configure. Silent when
-    /// storage is healthy — a warning that fires on every launch gets ignored.
-    private func reportStoreDegradation() {
-        guard let reason = store.degradationDescription, !reportedStoreDegradation else { return }
-        reportedStoreDegradation = true
-        logger.debug("secure storage degraded: \(reason). "
-                     + "Check the app-sandbox / keychain-access-groups entitlement — "
-                     + "unsandboxed macOS and pre-first-unlock iOS launches are the usual causes.")
-    }
-
-    private func emitInstallDetectedIfNeeded() {
-        guard store.string(forKey: .hasEmittedInstall) == nil else { return }
-        // Only claim a first install if we can durably remember having claimed
-        // it. Otherwise the claim repeats on every launch — the phantom-install
-        // inflation in H5. Better to under-report one install than to invent
-        // dozens.
-        guard store.set("1", forKey: .hasEmittedInstall) else {
-            logger.debug("could not persist the install marker — skipping install_detected "
-                         + "rather than re-emitting it on every launch")
-            reportStoreDegradation()
-            return
-        }
-        var props: [String: String] = [:]
-        if let sid = sessionManager?.currentSessionId() { props["_bcs.session.id"] = sid }
-        let event = Event(name: "_bcs.install_detected", time: clock.nowISO8601(), properties: props.isEmpty ? nil : props)
-        enqueue(event)
-        // The install event is high-value and time-sensitive: don't wait for
-        // batchSize or the periodic timer — attempt to send it right away.
-        // (Later track() calls in Task 11 rely on the batch-size/timer path.)
-        flushInternal()
-    }
-
-    /// Emits `_bcs.apple.app_updated` when the app version/build changed since the
-    /// last recorded run. Never on first install (no prior version recorded).
-    private func checkAppUpdate() {
-        let currentVersion = environment["app.version"] ?? ""
-        let currentBuild = environment["app.build"] ?? ""
-        let storedVersion = store.string(forKey: .lastKnownVersion)
-        let storedBuild = store.string(forKey: .lastKnownBuild)
-        if let storedVersion, storedVersion != currentVersion || storedBuild != currentBuild {
-            var props: [String: String] = [:]
-            if let sid = sessionManager?.currentSessionId() { props["_bcs.session.id"] = sid }
-            props["_bcs.apple.previous_version"] = storedVersion
-            if let storedBuild { props["_bcs.apple.previous_build"] = storedBuild }
-            enqueue(Event(name: "_bcs.apple.app_updated", time: clock.nowISO8601(), properties: props))
-            // Like install_detected, this is high-value and time-sensitive: send it
-            // right away rather than waiting for batchSize or the periodic timer —
-            // otherwise it would never flush on a non-first-install run where
-            // emitInstallDetectedIfNeeded's guard short-circuits before flushing.
-            flushInternal()
-        }
-        store.set(currentVersion, forKey: .lastKnownVersion)
-        store.set(currentBuild, forKey: .lastKnownBuild)
-    }
-
-    private func handleBackground() {
-        guard let config = configuration, !isOptedOut else { return }
-        var props: [String: String] = [:]
-        if let sid = startSessionIfNeeded() { props["_bcs.session.id"] = sid }
-        enqueue(Event(name: "_bcs.apple.app_backgrounded", time: clock.nowISO8601(),
-                      properties: props.isEmpty ? nil : props))
-        if config.options.flushOnBackground { flushInternal() }
-    }
-
-    private func handleForeground() {
-        guard configuration != nil, !isOptedOut else { return }
-        startSessionIfNeeded() // resumes: emits session_started only if the timeout was exceeded
     }
 
     // MARK: - Queue + flush (M4)
@@ -329,8 +287,17 @@ final class BeaconstatCore {
     /// Sends one batch (≤100). One in-flight flush at a time.
     private func flushInternal() {
         guard !flushing, !stoppedForAuth, !isOptedOut,
-              let config = configuration, let transport = transport, let siteToken = siteToken,
+              let config = configuration, let transport = transport,
               let queue_ = queue_ else { return }
+        guard let siteToken = siteToken else {
+            // No token: this launch's handshake failed, or hasn't happened yet.
+            // Re-handshake on *this* trigger — the periodic timer, reconnect, the
+            // retry backoff, a batch-size trip — instead of silently giving up
+            // for the rest of the process, which is what C1 described. Only when
+            // there is something to send: an idle offline app shouldn't poll.
+            if !queue_.isEmpty { requestHandshake() }
+            return
+        }
         let batch = queue_.dequeueBatch(max: 100)
         guard !batch.isEmpty else { return }
         let body = EventBatch(productVersion: config.options.productVersionOrDefault,
@@ -537,4 +504,101 @@ final class BeaconstatCore {
         }
     }
     #endif
+}
+
+// MARK: - Session lifecycle + exactly-once launch events
+
+/// Split into an extension so the orchestrator stays inside its
+/// `type_body_length` budget as the consent/retry machinery grows. Kept in
+/// this file so the core's `private` state stays private. Everything here
+/// runs on the core's serial queue, called only from code already on it.
+extension BeaconstatCore {
+    private func startSessionThenInstall() {
+        startSessionIfNeeded()
+        checkAppUpdate()
+        emitInstallDetectedIfNeeded()
+    }
+
+    /// Starts a new session if needed (emitting `_bcs.session_started`), and
+    /// returns the current session id (existing or newly-started).
+    @discardableResult
+    private func startSessionIfNeeded() -> String? {
+        guard let sessionManager else { return nil }
+        if let start = sessionManager.startIfNeeded() {
+            var props: [String: String] = ["_bcs.session.id": start.id]
+            if start.isFirst { props["_bcs.is_first_session"] = "true" }
+            if let prev = start.previousAt { props["_bcs.previous_session_at"] = prev }
+            enqueue(Event(name: "_bcs.session_started", time: clock.nowISO8601(), properties: props))
+        }
+        return sessionManager.currentSessionId()
+    }
+
+    /// Reports degraded secure storage exactly once per configure. Silent when
+    /// storage is healthy — a warning that fires on every launch gets ignored.
+    private func reportStoreDegradation() {
+        guard let reason = store.degradationDescription, !reportedStoreDegradation else { return }
+        reportedStoreDegradation = true
+        logger.debug("secure storage degraded: \(reason). "
+                     + "Check the app-sandbox / keychain-access-groups entitlement — "
+                     + "unsandboxed macOS and pre-first-unlock iOS launches are the usual causes.")
+    }
+
+    private func emitInstallDetectedIfNeeded() {
+        guard store.string(forKey: .hasEmittedInstall) == nil else { return }
+        // Only claim a first install if we can durably remember having claimed
+        // it. Otherwise the claim repeats on every launch — the phantom-install
+        // inflation in H5. Better to under-report one install than to invent
+        // dozens.
+        guard store.set("1", forKey: .hasEmittedInstall) else {
+            logger.debug("could not persist the install marker — skipping install_detected "
+                         + "rather than re-emitting it on every launch")
+            reportStoreDegradation()
+            return
+        }
+        var props: [String: String] = [:]
+        if let sid = sessionManager?.currentSessionId() { props["_bcs.session.id"] = sid }
+        let event = Event(name: "_bcs.install_detected", time: clock.nowISO8601(), properties: props.isEmpty ? nil : props)
+        enqueue(event)
+        // The install event is high-value and time-sensitive: don't wait for
+        // batchSize or the periodic timer — attempt to send it right away.
+        // (Later track() calls in Task 11 rely on the batch-size/timer path.)
+        flushInternal()
+    }
+
+    /// Emits `_bcs.apple.app_updated` when the app version/build changed since the
+    /// last recorded run. Never on first install (no prior version recorded).
+    private func checkAppUpdate() {
+        let currentVersion = environment["app.version"] ?? ""
+        let currentBuild = environment["app.build"] ?? ""
+        let storedVersion = store.string(forKey: .lastKnownVersion)
+        let storedBuild = store.string(forKey: .lastKnownBuild)
+        if let storedVersion, storedVersion != currentVersion || storedBuild != currentBuild {
+            var props: [String: String] = [:]
+            if let sid = sessionManager?.currentSessionId() { props["_bcs.session.id"] = sid }
+            props["_bcs.apple.previous_version"] = storedVersion
+            if let storedBuild { props["_bcs.apple.previous_build"] = storedBuild }
+            enqueue(Event(name: "_bcs.apple.app_updated", time: clock.nowISO8601(), properties: props))
+            // Like install_detected, this is high-value and time-sensitive: send it
+            // right away rather than waiting for batchSize or the periodic timer —
+            // otherwise it would never flush on a non-first-install run where
+            // emitInstallDetectedIfNeeded's guard short-circuits before flushing.
+            flushInternal()
+        }
+        store.set(currentVersion, forKey: .lastKnownVersion)
+        store.set(currentBuild, forKey: .lastKnownBuild)
+    }
+
+    private func handleBackground() {
+        guard let config = configuration, !isOptedOut else { return }
+        var props: [String: String] = [:]
+        if let sid = startSessionIfNeeded() { props["_bcs.session.id"] = sid }
+        enqueue(Event(name: "_bcs.apple.app_backgrounded", time: clock.nowISO8601(),
+                      properties: props.isEmpty ? nil : props))
+        if config.options.flushOnBackground { flushInternal() }
+    }
+
+    private func handleForeground() {
+        guard configuration != nil, !isOptedOut else { return }
+        startSessionIfNeeded() // resumes: emits session_started only if the timeout was exceeded
+    }
 }

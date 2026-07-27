@@ -60,8 +60,15 @@ final class BeaconstatCoreHandshakeTests: XCTestCase {
                        options: BeaconstatOptions(), environment: ["device.platform": "ios"])
         core.onQuiescent { done.fulfill() }
         wait(for: [done], timeout: 3)
-        // No events request should have been sent (install already emitted, nothing else queued).
-        XCTAssertFalse(MockURLProtocol.capturedRequests.contains { $0.url!.path.hasSuffix("/events") })
+        // `install_detected` must not be re-emitted. A send does happen: since
+        // C1 a successful handshake flushes what's already queued, which on this
+        // path is the run's `session_started` — previously that sat on disk until
+        // the periodic timer (4 hours away in Release).
+        let sent = MockURLProtocol.capturedRequests.enumerated().compactMap { i, req in
+            req.url!.path.hasSuffix("/events") ? String(data: MockURLProtocol.capturedBodies[i], encoding: .utf8) : nil
+        }.joined()
+        XCTAssertFalse(sent.contains("_bcs.install_detected"))
+        XCTAssertTrue(sent.contains("_bcs.session_started"))
     }
 
     func testInvalidKeysDisableSilently() {

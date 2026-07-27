@@ -16,6 +16,7 @@ final class EventQueue {
     }
 
     var count: Int { events.count }
+    var isEmpty: Bool { events.isEmpty }
 
     func enqueue(_ event: Event) {
         events.append(event)
