@@ -60,6 +60,20 @@ public struct BeaconstatOptions: Sendable {
     /// Backoff retries per failed round. Clamped to `Limits.maxRetries`.
     public var maxRetries: Int
     public var debugLogging: Bool
+    /// Collect the `accessibility.*` environment keys. **Defaults to `false`**
+    /// (M10).
+    ///
+    /// These are disability-adjacent signals — bold text, reduce motion, reduce
+    /// transparency, invert colours, increased contrast, differentiate without
+    /// colour, preferred content size. None is prohibited and the SDK collects
+    /// no IDFA/IDFV, but alongside `device.model`, the screen metrics,
+    /// `timezone`, `locale` and the OS version they sharpen the fingerprint
+    /// materially, and collecting them puts a disclosure obligation in your
+    /// app's privacy manifest.
+    ///
+    /// Turn it on deliberately, when you are actually going to act on the data
+    /// (for example sizing an accessibility work programme) and your privacy
+    /// manifest and policy say so.
     public var collectAccessibility: Bool
     /// Override the ingest base URL (dev / self-host). Defaults to production.
     ///
@@ -131,7 +145,7 @@ public struct BeaconstatOptions: Sendable {
         maxQueuedEvents: Int = 500,
         maxRetries: Int = 3,
         debugLogging: Bool = false,
-        collectAccessibility: Bool = true,
+        collectAccessibility: Bool = false,
         endpoint: URL? = nil,
         keychainAccessGroup: String? = nil,
         productVersion: String? = nil,

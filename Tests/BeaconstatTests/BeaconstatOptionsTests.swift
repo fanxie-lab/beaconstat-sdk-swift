@@ -9,7 +9,7 @@ final class BeaconstatOptionsTests: XCTestCase {
         XCTAssertEqual(o.maxQueuedEvents, 500)
         XCTAssertEqual(o.maxRetries, 3)
         XCTAssertTrue(o.flushOnBackground)
-        XCTAssertTrue(o.collectAccessibility)
+        XCTAssertFalse(o.collectAccessibility) // opt-in since M10
         XCTAssertFalse(o.debugLogging)
         XCTAssertNil(o.endpoint)
         XCTAssertEqual(o.testMode, .automatic)
