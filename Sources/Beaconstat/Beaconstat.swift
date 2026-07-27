@@ -14,6 +14,20 @@ public enum Beaconstat {
     /// `device.orientation`, `user_preference.color_scheme` and every
     /// `accessibility.*` key. Call it from `App.init`, `didFinishLaunching`, or
     /// any other main-actor context.
+    ///
+    /// ## Environment freshness
+    ///
+    /// The `environment` map sent with every batch is snapshotted here and then
+    /// refreshed as follows:
+    ///
+    /// - `device.orientation`, `device.screen_width`/`_height`/`_scale`,
+    ///   `user_preference.color_scheme` and every `accessibility.*` key are
+    ///   re-read on the main thread on **each foreground transition**. A change
+    ///   made while the app is frontmost (rotating the device without leaving)
+    ///   is reported from the next foreground onwards.
+    /// - Everything else — `device.model`, `device.os_version`, `locale`,
+    ///   `timezone`, `app.version`, `sdk.*`, `run_context.*` — is collected once
+    ///   per process and does not change while it runs.
     @MainActor
     public static func configure(publicKey: String, hmacSecret: String) {
         configure(publicKey: publicKey, hmacSecret: hmacSecret, options: BeaconstatOptions())
@@ -38,9 +52,19 @@ public enum Beaconstat {
         // launch critical path without racing anything (M6).
         let mainThreadEnvironment = EnvironmentCollector
             .collectMainThreadOnly(collectAccessibility: opts.collectAccessibility)
-        BeaconstatCore.shared.configure(publicKey: publicKey, hmacSecret: hmacSecret,
-                                        options: opts, environment: mainThreadEnvironment,
-                                        deferredEnvironment: { collector.collectDeferrable() })
+        let collectAccessibility = opts.collectAccessibility
+        BeaconstatCore.shared.configure(
+            publicKey: publicKey, hmacSecret: hmacSecret,
+            options: opts, environment: mainThreadEnvironment,
+            deferredEnvironment: { collector.collectDeferrable() },
+            // Re-read on each foreground: orientation, screen metrics, colour
+            // scheme and the accessibility flags all change while the app runs,
+            // and the launch snapshot used to be reported forever (L1). The core
+            // runs this on the main thread and never per event.
+            volatileEnvironment: {
+                EnvironmentCollector.collectMainThreadOnlyAssumingMainThread(
+                    collectAccessibility: collectAccessibility)
+            })
     }
 
     /// Track a custom event. Property values are strings.

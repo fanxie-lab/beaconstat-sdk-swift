@@ -42,8 +42,26 @@ struct EnvironmentCollector {
     /// `user_preference.color_scheme` and every `accessibility.*` key silently
     /// go wrong (M1). Cheap — these are property reads, not syscalls — so it
     /// stays synchronous on the launch path.
+    ///
+    /// This is also the **volatile** half: every value here can change while the
+    /// app runs (rotation, iPad multitasking resize, Dark Mode, an accessibility
+    /// setting toggled in Settings), which is why the core re-reads it on every
+    /// foreground transition (L1).
     @MainActor
     static func collectMainThreadOnly(collectAccessibility: Bool) -> [String: String] {
+        collectMainThreadOnlyAssumingMainThread(collectAccessibility: collectAccessibility)
+    }
+
+    /// The same snapshot, without the `@MainActor` the compiler can check.
+    ///
+    /// **The caller guarantees it is already on the main thread.** This exists
+    /// for exactly one call site: the core's foreground refresh, which runs
+    /// inside `DispatchQueue.main.async` (L1). That *is* the main thread, but
+    /// the only way to tell the compiler so is `MainActor.assumeIsolated`, which
+    /// needs iOS 17 / macOS 14 while this package deploys to iOS 15 / macOS 12.
+    ///
+    /// Prefer `collectMainThreadOnly` everywhere the annotation can be honoured.
+    static func collectMainThreadOnlyAssumingMainThread(collectAccessibility: Bool) -> [String: String] {
         var d: [String: String] = [:]
         if let screen = screenMetrics() {
             d["device.screen_width"] = String(screen.width)
@@ -166,7 +184,10 @@ struct EnvironmentCollector {
         }
     }
 
-    @MainActor
+    /// Main-thread-only (`UITraitCollection.current`). The `@MainActor`
+    /// annotation lives on `collectMainThreadOnly`, the entry point callers
+    /// use; this stays unannotated so the nonisolated refresh path can reach it
+    /// (see `collectMainThreadOnlyAssumingMainThread`).
     static func colorScheme() -> String {
         #if canImport(UIKit) && !os(watchOS)
         return UITraitCollection.current.userInterfaceStyle == .dark ? "dark" : "light"
@@ -185,7 +206,7 @@ struct EnvironmentCollector {
 
     // MARK: - accessibility.*
 
-    @MainActor
+    /// Main-thread-only — see `colorScheme()` for why it isn't `@MainActor`.
     private static func accessibilityKeys() -> [String: String] {
         var d: [String: String] = [:]
         #if canImport(UIKit) && !os(watchOS)
@@ -302,7 +323,8 @@ struct EnvironmentCollector {
 
     struct ScreenMetrics { let width: Int; let height: Int; let scale: Int; let orientation: String? }
 
-    @MainActor
+    /// Main-thread-only (`UIScreen.main`) — see `colorScheme()` for why it
+    /// isn't `@MainActor`.
     static func screenMetrics() -> ScreenMetrics? {
         #if canImport(UIKit) && !os(watchOS)
         let screen = UIScreen.main

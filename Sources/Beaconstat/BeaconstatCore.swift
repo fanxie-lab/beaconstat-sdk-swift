@@ -31,6 +31,9 @@ final class BeaconstatCore {
     /// ask for one collapse into a single request (C1).
     private var handshaking = false
     private var environment: [String: String] = [:]
+    /// Re-collects the volatile (main-thread) half of `environment`. Called on
+    /// the main thread, once per foreground transition (L1).
+    private var volatileEnvironment: (() -> [String: String])?
     private var routesToTest = false
     private var queue_: EventQueue?
     private var flushTimer: DispatchSourceTimer?
@@ -143,10 +146,15 @@ final class BeaconstatCore {
     ///     serial queue so it never costs main-thread time at launch (M6). It
     ///     runs at the top of this block, so routing and the handshake always
     ///     see the merged snapshot.
+    ///   - volatileEnvironment: re-collects the main-thread half on every
+    ///     foreground transition (L1). Invoked on the main thread, never on the
+    ///     per-event path.
     func configure(publicKey: String, hmacSecret: String, options: BeaconstatOptions,
                    environment: [String: String],
-                   deferredEnvironment: (() -> [String: String])? = nil) {
+                   deferredEnvironment: (() -> [String: String])? = nil,
+                   volatileEnvironment: (() -> [String: String])? = nil) {
         queue.async {
+            self.volatileEnvironment = volatileEnvironment
             // Build a logger up front so opt-out / bad-key diagnostics actually emit.
             self.logger = self.makeLogger(debugLogging: options.debugLogging)
             // Finish the snapshot before anything reads it: routing consumes
@@ -864,5 +872,40 @@ extension BeaconstatCore {
         inBackground = false
         guard configuration != nil, !isOptedOut else { return }
         startSessionIfNeeded() // resumes: emits session_started only if the timeout was exceeded
+        refreshVolatileEnvironment()
+    }
+
+    /// Re-reads the volatile half of the environment snapshot.
+    ///
+    /// The snapshot used to be taken once at `configure()` and reused for every
+    /// batch for the process lifetime, so `device.orientation`,
+    /// `device.screen_*`, `user_preference.color_scheme` and every
+    /// `accessibility.*` value were launch-time values forever — rotate the
+    /// device or switch to Dark Mode and the SDK kept reporting otherwise, with
+    /// nothing documenting it (L1).
+    ///
+    /// Foreground is the right and only trigger: it is when those values have
+    /// most likely changed (the user was in Settings, or Control Centre, or
+    /// turned the device), it is bounded by how often the user leaves and
+    /// returns, and it keeps M6's guarantee that the UI reads never touch the
+    /// per-event path. In-session changes — rotating while the app is frontmost
+    /// — are reported from the next foreground onwards; observing trait changes
+    /// continuously would put main-thread work back on the hot path for a
+    /// dimension nobody analyses at that resolution.
+    ///
+    /// `batchByteBudget` is deliberately not recomputed: the key set is fixed
+    /// and the values are short tokens, so a refresh cannot meaningfully move
+    /// it, and recomputing would undo a shrink an earlier 413 had earned (H3).
+    private func refreshVolatileEnvironment() {
+        guard let volatileEnvironment else { return }
+        DispatchQueue.main.async { [weak self] in
+            // On the main thread by construction, which is what
+            // `collectMainThreadOnlyAssumingMainThread` needs.
+            let fresh = volatileEnvironment()
+            self?.queue.async {
+                guard let self, !self.isOptedOut else { return }
+                self.environment.merge(fresh) { _, new in new }
+            }
+        }
     }
 }
