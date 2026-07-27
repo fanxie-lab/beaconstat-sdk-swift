@@ -6,34 +6,167 @@ on:
   pull_request:
 
 jobs:
+  # Debug and Release are separate matrix legs, not one job running both.
+  # `swift test -c release` did not even compile until 2.0.0 (`onQuiescent` was
+  # `#if DEBUG`), so the two behaviours that exist only in Release — `.automatic`
+  # routing sending to /v1/events, and the 4-hour default flushInterval — had
+  # never been executed by a test anywhere.
   test:
-    runs-on: macos-14
+    name: Test (${{ matrix.configuration }})
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [debug, release]
     steps:
       - uses: actions/checkout@v4
       - name: Swift version
         run: swift --version
       - name: Build
-        run: swift build
+        run: swift build -c ${{ matrix.configuration }}
       - name: Test
-        run: swift test --enable-code-coverage
+        run: swift test -c ${{ matrix.configuration }}
+
+  # Runs the suite three times. Every wave of the review fix reported
+  # "deterministic across N runs"; this is what keeps that true without anyone
+  # remembering to check, and it is the shape of job that catches the low-rate
+  # substring flakes this suite has had before.
+  determinism:
+    name: Determinism (3 consecutive runs)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test x3
+        run: for i in 1 2 3; do echo "--- run $i ---"; swift test || exit 1; done
+
+  # The invariant the whole concurrency design rests on. `ConcurrencySoakTests`
+  # drives track() from 8 threads while flush, reconnect and background
+  # transitions interleave; TSan is what turns "no data races" from a
+  # code-reading claim into a measured one.
+  thread-sanitizer:
+    name: ThreadSanitizer
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test under TSan
+        run: swift test --sanitize=thread
+
+  # The package ships as swift-tools-version 5.9 so adopters on older toolchains
+  # are unaffected, but the sources must stay Swift 6 clean so a host that has
+  # migrated is not blocked (M13). Warnings are errors here: the 178
+  # strict-concurrency warnings this replaced accumulated precisely because
+  # nothing ever failed on them.
+  swift6:
+    name: Swift 6 language mode
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build in Swift 6 mode
+        run: swift build -Xswiftc -swift-version -Xswiftc 6 -Xswiftc -warnings-as-errors
+      - name: Build with complete strict concurrency
+        run: swift build -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors
 
   lint:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Install SwiftLint
         run: brew install swiftlint
-      - name: Lint
+      - name: Lint (0 errors required)
         run: swiftlint lint --reporter github-actions-logging
 
-  ios-build:
-    runs-on: macos-14
+  # Every platform Package.swift declares, built in Release.
+  #
+  # Only iOS and macOS were declared before 2.0.0, so tvOS, watchOS and visionOS
+  # inherited the toolchain's default deployment target and none of them was in
+  # CI. That is how watchOS shipped 1.0.0 with no lifecycle events at all, and
+  # how visionOS shipped advertised but uncompilable — `UIScreen` is
+  # `API_UNAVAILABLE(visionos)` and `EnvironmentCollector.screenMetrics()`
+  # referenced it unconditionally.
+  #
+  # The `run-tests` legs also RUN the suite there, which is what gives
+  # `PlatformSupportTests` teeth: on a single developer machine it only ever
+  # proved the macOS lifecycle mapping.
+  platforms:
+    name: ${{ matrix.name }}
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: iOS
+            destination: 'generic/platform=iOS Simulator'
+            runtime: iOS
+          - name: tvOS
+            destination: 'generic/platform=tvOS Simulator'
+            runtime: tvOS
+          - name: watchOS
+            destination: 'generic/platform=watchOS Simulator'
+            runtime: watchOS
+          - name: visionOS
+            destination: 'generic/platform=visionOS Simulator'
+            runtime: xrOS
+          - name: macOS
+            destination: 'generic/platform=macOS'
+            runtime: ''          # tests already run natively in the `test` job
+          - name: Mac Catalyst
+            destination: 'generic/platform=macOS,variant=Mac Catalyst'
+            runtime: ''
     steps:
       - uses: actions/checkout@v4
       - name: Xcode version
         run: xcodebuild -version
-      - name: Build for iOS Simulator
+      - name: Available destinations
+        # Printed on every run: when a hosted image drops a simulator runtime,
+        # the failure below is otherwise an opaque "destination not found".
+        run: xcodebuild -scheme Beaconstat -showdestinations || true
+
+      # The hard gate. A pure-Swift library needs no runtime to compile, so this
+      # step must pass on every declared platform, always.
+      - name: Build (Release)
         run: |
           xcodebuild build \
             -scheme Beaconstat \
-            -destination 'generic/platform=iOS Simulator'
+            -configuration Release \
+            -destination '${{ matrix.destination }}'
+
+      # Running the suite per platform is what would catch a platform silently
+      # losing lifecycle events — `PlatformSupportTests` asserts against
+      # whichever platform it is compiled for, and on a single dev machine that
+      # only ever proves macOS.
+      #
+      # The device is resolved from `simctl` rather than hardcoded: device names
+      # churn with every Xcode release ("iPhone 16" → "iPhone 17"), and a
+      # hardcoded name turns a green build red for a reason that has nothing to
+      # do with this package.
+      - name: Test on a simulator
+        if: matrix.runtime != ''
+        run: |
+          set -euo pipefail
+          DEVICE=$(xcrun simctl list devices available --json \
+            | python3 -c "
+          import json, sys
+          devices = json.load(sys.stdin)['devices']
+          for identifier, entries in devices.items():
+              if '.${{ matrix.runtime }}-' in identifier and entries:
+                  print(entries[0]['udid'])
+                  break
+          ")
+          if [ -z "$DEVICE" ]; then
+            echo '::error::No ${{ matrix.runtime }} simulator runtime on this image.'
+            echo 'The Release build above still passed, but the suite did not run here.'
+            exit 1
+          fi
+          echo "Using ${{ matrix.runtime }} simulator $DEVICE"
+          xcodebuild test -scheme Beaconstat -destination "id=$DEVICE"
+
+  # The README's quick start has to compile against the shipped API, or the
+  # first thing an adopter copies is already wrong.
+  sample:
+    name: Example app
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the sample
+        working-directory: Examples/BeaconstatSample
+        run: swift build
