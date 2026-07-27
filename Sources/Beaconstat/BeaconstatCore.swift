@@ -56,6 +56,10 @@ final class BeaconstatCore {
     /// shares the same request body, and halves on a 413 so a deployment with a
     /// smaller body limit than ours converges instead of looping.
     private var batchByteBudget = EventQueue.defaultMaxBatchBytes
+    /// The consent decision. Held in memory rather than re-read per event, and
+    /// updated on the caller's thread so the public getter can't lag the call
+    /// that changed it (M4, M5).
+    private let optOutFlag: OptOutFlag
 
     init(store: SecureStore = LayeredSecureStore(
              primary: KeychainSecureStore(),
@@ -89,6 +93,12 @@ final class BeaconstatCore {
         self.reachabilityFactory = reachabilityFactory
         self.lifecycleObserver = lifecycleObserver
         self.logSink = logSink
+        self.optOutFlag = OptOutFlag(store: store)
+        // Load the persisted decision off the caller's thread. `configure()` and
+        // every entry point run on this queue, so they are ordered behind it;
+        // only a host reading `isOptedOut` in the same instant could beat it,
+        // and `OptOutFlag` loads on demand for exactly that case.
+        queue.async { [optOutFlag] in optOutFlag.prime() }
     }
 
     private func makeLogger(debugLogging: Bool) -> Logger {
@@ -547,11 +557,17 @@ final class BeaconstatCore {
     }
 
     func optOut() {
+        // Record the decision on the CALLER's thread, before the hop. The
+        // observable flag used to be written from inside the block below while
+        // `isOptedOut` read the store synchronously here, so
+        // `optOut(); assert(isOptedOut)` failed intermittently (M4). This also
+        // shuts collection off strictly earlier than before.
+        optOutFlag.record(true)
         queue.async {
-            // Flag first: it is what the in-flight flush completion re-checks
+            // Persist first: the in-flight flush completion re-checks the flag
             // before deciding to re-queue a batch, and this block is ordered
             // ahead of that completion on this serial queue.
-            self.store.set("1", forKey: .optedOut)
+            self.optOutFlag.persist()
             self.queue_?.clear()
             self.stopCollection()
             self.purgeLocalIdentity()
@@ -576,8 +592,9 @@ final class BeaconstatCore {
     }
 
     func optIn() {
+        optOutFlag.record(false) // see optOut() — the getter must not lag (M4)
         queue.async {
-            self.store.set(nil, forKey: .optedOut)
+            self.optOutFlag.persist()
             guard self.configuration != nil else {
                 // Nothing to resume yet; configure() will start collection.
                 self.logger.debug("opted in before configure — collection starts at configure()")
@@ -590,7 +607,14 @@ final class BeaconstatCore {
             self.startCollection()
         }
     }
-    var isOptedOut: Bool { store.string(forKey: .optedOut) != nil }
+    /// Non-blocking, and consistent with the last `optOut()` / `optIn()` the
+    /// host made — including from another thread, and including before the
+    /// serial queue has got round to persisting it (M4).
+    ///
+    /// Reads an in-memory flag, so the ~9 internal consultations per event no
+    /// longer cost a Keychain round trip each (M5) and a SwiftUI `body` can read
+    /// `Beaconstat.isOptedOut` freely.
+    var isOptedOut: Bool { optOutFlag.value }
 
     // MARK: - Test hook
 
