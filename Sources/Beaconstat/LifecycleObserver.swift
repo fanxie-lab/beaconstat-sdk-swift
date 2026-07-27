@@ -13,6 +13,11 @@ final class LifecycleObserver {
     var onForeground: (() -> Void)?
     private var tokens: [NSObjectProtocol] = []
 
+    /// Whether OS notifications are currently subscribed. `optOut()` and
+    /// `shutdown()` must leave this `false` — the observers used to stay
+    /// registered for the app's lifetime (M14).
+    var isObserving: Bool { !tokens.isEmpty }
+
     func start() {
         let center = NotificationCenter.default
         #if canImport(UIKit) && !os(watchOS)

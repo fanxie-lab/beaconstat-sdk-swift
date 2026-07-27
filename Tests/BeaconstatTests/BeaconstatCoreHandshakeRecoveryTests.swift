@@ -231,13 +231,14 @@ final class BeaconstatCoreHandshakeRecoveryTests: XCTestCase {
     }
 }
 
-/// A `Reachability` a test drives by hand.
+/// A `Reachability` a test drives by hand. Counts start/stop so teardown and
+/// restart (M14) are observable, not just "did it ever start".
 final class ManualReachability: Reachability {
     var onReconnect: (() -> Void)?
-    private(set) var started = false
-    private(set) var stopped = false
+    private(set) var startCount = 0
+    private(set) var stopCount = 0
 
-    func start() { started = true }
-    func stop() { stopped = true }
+    func start() { startCount += 1 }
+    func stop() { stopCount += 1 }
     func simulateReconnect() { onReconnect?() }
 }

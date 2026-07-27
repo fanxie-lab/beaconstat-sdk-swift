@@ -17,6 +17,10 @@ final class BeaconstatCore {
 
     private var configuration: Configuration?
     private var transport: Transport?
+    /// Held so it can be invalidated on reconfigure/shutdown (M7).
+    private var session: URLSession?
+    /// Whether timers/monitors/observers are currently running.
+    private var collecting = false
     private var logger = Logger(enabled: false, sink: { _ in })
     private var siteToken: String?
     /// At most one handshake in flight, so the many flush triggers that can now
@@ -107,10 +111,6 @@ final class BeaconstatCore {
         queue.async {
             // Build a logger up front so opt-out / bad-key diagnostics actually emit.
             self.logger = self.makeLogger(debugLogging: options.debugLogging)
-            guard self.store.string(forKey: .optedOut) == nil else {
-                self.logger.debug("opted out — collecting/sending nothing")
-                return
-            }
             // Finish the snapshot before anything reads it: routing consumes
             // `run_context.is_testflight`, which lives in the deferred half.
             var environment = environment
@@ -145,40 +145,124 @@ final class BeaconstatCore {
                     opts.testMode, isDebug: Self.isDebugBuild, isSimulator: Self.isSimulator,
                     isTestFlight: environment["run_context.is_testflight"] == "true",
                     routeTestFlightToTest: opts.routeTestFlightToTest)
-                self.transport = Transport(session: self.sessionProvider(config),
-                                           baseURL: config.baseURL, logger: self.logger)
-                // Reuse existing queue/session on reconfigure so an in-flight flush
-                // completion never operates on a replaced queue (same file path).
-                if self.queue_ == nil {
+                // A fresh URLSession per configure, and the previous one is
+                // released rather than leaked: URLSession retains itself until
+                // invalidated, so each reconfigure used to strand a session plus
+                // its delegate operation queue for the process lifetime (M7).
+                let session = self.sessionProvider(config)
+                self.invalidatePreviousSession()
+                self.session = session
+                self.transport = Transport(session: session, baseURL: config.baseURL,
+                                           logger: self.logger)
+                // Keep the same queue and session-manager *instances* across a
+                // reconfigure — an in-flight flush completion must never operate
+                // on a replaced queue — but apply the new options in place, so a
+                // second configure() is no longer silently ignored (M7).
+                if let queue_ = self.queue_ {
+                    queue_.setMaxQueued(opts.maxQueuedEvents)
+                } else {
                     self.queue_ = EventQueue(store: FileEventStore(fileURL: self.queueFileURL),
                                              maxQueued: opts.maxQueuedEvents, logger: self.logger)
                 }
-                if self.sessionManager == nil {
+                if let sessionManager = self.sessionManager {
+                    sessionManager.setTimeout(opts.sessionTimeout)
+                } else {
                     self.sessionManager = SessionManager(store: self.store, clock: self.clock,
                                                          timeout: opts.sessionTimeout)
                 }
-                self.startFlushTimer(interval: opts.flushInterval)
-                if self.reachability == nil {
-                    let r = self.reachabilityFactory(self.queue)
-                    r?.onReconnect = { [weak self] in self?.queue.async { self?.flushInternal() } }
-                    r?.start()
-                    self.reachability = r
+                // Configuration is now stored BEFORE the opt-out check, so a
+                // later optIn() has everything it needs to start collecting.
+                // Previously configure() returned before assigning it, and
+                // optIn() found nil and silently did nothing (H1).
+                guard !self.isOptedOut else {
+                    // Belt and braces: if a crash landed between optOut()'s flag
+                    // write and its purge, drop those events now rather than
+                    // transmitting them at the next opt-in.
+                    self.queue_?.clear()
+                    self.logger.debug("opted out — configured, but collecting and sending "
+                                      + "nothing until optIn()")
+                    return
                 }
-                if !self.lifecycleStarted {
-                    self.lifecycleObserver.onBackground = { [weak self] in
-                        self?.queue.async { self?.handleBackground() }
-                    }
-                    self.lifecycleObserver.onForeground = { [weak self] in
-                        self?.queue.async { self?.handleForeground() }
-                    }
-                    self.lifecycleObserver.start()
-                    self.lifecycleStarted = true
-                }
-                self.performHandshakeAndInstall()
+                self.collecting = false // reconfigure restarts with the new options
+                self.startCollection()
             } catch {
                 self.logger.debug("configure rejected: \(error)")
             }
         }
+    }
+
+    /// Stops all SDK activity and releases the OS resources it holds: cancels
+    /// the periodic flush and retry timers, cancels the reachability monitor,
+    /// removes the lifecycle observers, and invalidates the `URLSession`.
+    ///
+    /// Queued events stay on disk — call `flush()` first if you want a final
+    /// send attempt. Not required for normal use (configure once at launch and
+    /// leave it); it exists so a host *can* release everything, and so tests can
+    /// tear the SDK down deterministically. Safe to call more than once, and
+    /// `configure()` afterwards brings the SDK back.
+    func shutdown() {
+        queue.async {
+            self.stopCollection()
+            self.invalidatePreviousSession()
+            self.configuration = nil
+            self.transport = nil
+            self.siteToken = nil
+            self.logger.debug("shutdown — timers cancelled, monitors stopped, session invalidated")
+        }
+    }
+
+    // MARK: - Collection lifecycle
+
+    /// Starts everything that observes or transmits: the periodic flush, the
+    /// reachability monitor, the OS lifecycle observers, and the handshake.
+    /// Idempotent — a second call while already collecting does nothing.
+    private func startCollection() {
+        guard let config = configuration, !isOptedOut, !collecting else { return }
+        collecting = true
+        startFlushTimer(interval: config.options.flushInterval)
+        if reachability == nil {
+            let monitor = reachabilityFactory(queue)
+            monitor?.onReconnect = { [weak self] in self?.queue.async { self?.flushInternal() } }
+            monitor?.start()
+            reachability = monitor
+        }
+        if !lifecycleStarted {
+            lifecycleObserver.onBackground = { [weak self] in
+                self?.queue.async { self?.handleBackground() }
+            }
+            lifecycleObserver.onForeground = { [weak self] in
+                self?.queue.async { self?.handleForeground() }
+            }
+            lifecycleObserver.start()
+            lifecycleStarted = true
+        }
+        performHandshakeAndInstall()
+    }
+
+    /// Stops everything that observes or transmits.
+    ///
+    /// `configuration` is deliberately left intact so `optIn()` can resume
+    /// without the host reconfiguring. Before this existed, `optOut()` left the
+    /// `NWPathMonitor` running and the `NotificationCenter` observers registered
+    /// for the app's lifetime, so every path flap and app switch still cost a
+    /// Keychain read (M14).
+    private func stopCollection() {
+        collecting = false
+        flushTimer?.cancel(); flushTimer = nil
+        retryTimer?.cancel(); retryTimer = nil
+        retryCount = 0
+        reachability?.stop(); reachability = nil
+        if lifecycleStarted {
+            lifecycleObserver.stop()
+            lifecycleStarted = false
+        }
+    }
+
+    /// `URLSession` retains itself until invalidated. `finishTasksAndInvalidate`
+    /// lets an in-flight send complete first, so this never drops a batch.
+    private func invalidatePreviousSession() {
+        session?.finishTasksAndInvalidate()
+        session = nil
     }
 
     // MARK: - Handshake + install (M3)
@@ -470,20 +554,46 @@ final class BeaconstatCore {
 
     func optOut() {
         queue.async {
+            // Flag first: it is what the in-flight flush completion re-checks
+            // before deciding to re-queue a batch, and this block is ordered
+            // ahead of that completion on this serial queue.
             self.store.set("1", forKey: .optedOut)
             self.queue_?.clear()
-            self.flushTimer?.cancel(); self.flushTimer = nil
-            self.retryTimer?.cancel(); self.retryTimer = nil
-            self.logger.debug("opted out — purged queue, cancelled timers")
+            self.stopCollection()
+            self.purgeLocalIdentity()
+            self.logger.debug("opted out — purged queue and local identity, "
+                              + "stopped timers, monitors and observers")
+        }
+    }
+
+    /// Drops every locally stored identifier, so a "delete my data" request
+    /// clears the device and not just the server (M14). The `optedOut` flag
+    /// itself is kept — it *is* the consent record, and losing it would silently
+    /// re-enable collection on the next launch.
+    ///
+    /// A later `optIn()` therefore starts a brand-new anonymous install rather
+    /// than resurrecting the deleted one.
+    private func purgeLocalIdentity() {
+        siteToken = nil
+        sessionManager?.reset()
+        for key in SecureStoreKey.allCases where key != .optedOut {
+            store.set(nil, forKey: key)
         }
     }
 
     func optIn() {
         queue.async {
             self.store.set(nil, forKey: .optedOut)
-            if let interval = self.configuration?.options.flushInterval {
-                self.startFlushTimer(interval: interval) // resume periodic flush
+            guard self.configuration != nil else {
+                // Nothing to resume yet; configure() will start collection.
+                self.logger.debug("opted in before configure — collection starts at configure()")
+                return
             }
+            // Restart everything opt-out tore down — and, when configure() ran
+            // while opted out, start it for the first time. This used to only
+            // restart a flush timer that could never have any configuration
+            // behind it, so every later track() was dropped (H1).
+            self.startCollection()
         }
     }
     var isOptedOut: Bool { store.string(forKey: .optedOut) != nil }

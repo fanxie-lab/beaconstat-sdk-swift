@@ -51,9 +51,33 @@ public enum Beaconstat {
     /// Force-send queued events (best-effort, async).
     public static func flush() { BeaconstatCore.shared.flush() }
 
-    /// Host-controlled kill switch. When opted out, the SDK collects/sends nothing.
+    /// Stop all SDK activity and release the OS resources it holds: the periodic
+    /// flush and retry timers, the network-path monitor, the app lifecycle
+    /// observers, and the `URLSession` (which retains itself until invalidated).
+    ///
+    /// Queued events stay on disk; call `flush()` first if you want a final send
+    /// attempt. Optional — configure once at launch and you never need this. It
+    /// exists so a host *can* release everything, and so tests can tear the SDK
+    /// down deterministically. Safe to call repeatedly, and `configure()`
+    /// afterwards brings the SDK back.
+    public static func shutdown() { BeaconstatCore.shared.shutdown() }
+
+    /// Host-controlled kill switch. While opted out the SDK collects and sends
+    /// nothing, and it also stops doing *work*: timers, the network-path monitor
+    /// and the lifecycle observers are torn down.
+    ///
+    /// This also purges local identity — `install_id`, the site token and
+    /// session history — so it doubles as the device half of a "delete my data"
+    /// request. A later `optIn()` therefore starts a fresh anonymous install.
+    /// The opt-out flag itself persists across launches.
     public static func optOut() { BeaconstatCore.shared.optOut() }
 
+    /// Resume collection after `optOut()`.
+    ///
+    /// Works in the documented consent order — `optOut()` → `configure()` →
+    /// `optIn()` — because `configure()` completes setup even while opted out
+    /// and only collection is gated. If `configure()` hasn't run yet, collection
+    /// starts when it does.
     public static func optIn() { BeaconstatCore.shared.optIn() }
 
     public static var isOptedOut: Bool { BeaconstatCore.shared.isOptedOut }

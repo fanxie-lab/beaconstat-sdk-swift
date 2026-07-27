@@ -12,7 +12,7 @@ struct SessionStart {
 final class SessionManager {
     private let store: SecureStore
     private let clock: Clock
-    private let timeout: TimeInterval
+    private var timeout: TimeInterval
 
     private var sessionId: String?
     private var lastActivity: Date?
@@ -24,6 +24,18 @@ final class SessionManager {
     }
 
     func currentSessionId() -> String? { sessionId }
+
+    /// Applies a new inactivity window on reconfigure, without ending the
+    /// current session. Before this, a second `configure()` silently kept the
+    /// original `sessionTimeout` (M7).
+    func setTimeout(_ newValue: TimeInterval) { timeout = newValue }
+
+    /// Forgets the in-memory session so the next `startIfNeeded()` begins a
+    /// fresh one. Used by `optOut()`'s local identity purge (M14).
+    func reset() {
+        sessionId = nil
+        lastActivity = nil
+    }
 
     /// Starts a new session on cold start or after the inactivity timeout;
     /// otherwise refreshes last-activity and returns nil.

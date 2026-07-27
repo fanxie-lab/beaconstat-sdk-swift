@@ -5,7 +5,7 @@ import Foundation
 final class EventQueue {
     private var events: [Event]
     private let store: EventStore
-    private let maxQueued: Int
+    private var maxQueued: Int
     private let logger: Logger
 
     init(store: EventStore, maxQueued: Int, logger: Logger) {
@@ -17,6 +17,20 @@ final class EventQueue {
 
     var count: Int { events.count }
     var isEmpty: Bool { events.isEmpty }
+
+    /// Applies a new cap on reconfigure, in place, so the queue *instance* is
+    /// never replaced while a flush completion still holds a checked-out batch
+    /// (M7). Enforces the new cap immediately rather than at the next enqueue.
+    func setMaxQueued(_ newValue: Int) {
+        let clamped = Swift.max(1, newValue)
+        guard clamped != maxQueued else { return }
+        maxQueued = clamped
+        guard events.count > maxQueued else { return }
+        let overflow = events.count - maxQueued
+        events.removeFirst(overflow)
+        logger.debug("maxQueuedEvents lowered to \(maxQueued) — dropped \(overflow) oldest event(s)")
+        store.save(events)
+    }
 
     func enqueue(_ event: Event) {
         events.append(event)
