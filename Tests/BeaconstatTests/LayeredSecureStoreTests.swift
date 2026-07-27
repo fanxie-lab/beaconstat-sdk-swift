@@ -140,6 +140,22 @@ final class LayeredSecureStoreTests: XCTestCase {
         XCTAssertNil(store.degradationDescription, "a successful heal is not a degradation")
     }
 
+    /// When the back-fill itself fails, the Keychain must stop being consulted
+    /// for that key — otherwise a stale item could shadow the mirror on the very
+    /// next read.
+    func testFailedBackFillDistrustsThePrimaryForThatKey() {
+        let mirrorFile = tempFile(); defer { try? FileManager.default.removeItem(at: mirrorFile) }
+        let mirror = FileSecureStore(fileURL: mirrorFile)
+        mirror.set("install-from-mirror", forKey: .installId)
+        let primary = FlakySecureStore(failingKeys: [.installId])
+        let store = LayeredSecureStore(primary: primary, mirror: mirror)
+
+        XCTAssertEqual(store.string(forKey: .installId), "install-from-mirror")
+        primary.plant("install-stale", forKey: .installId) // Keychain now *reads* a stale value
+        XCTAssertEqual(store.string(forKey: .installId), "install-from-mirror",
+                       "a stale Keychain item shadowed the mirror after a failed heal")
+    }
+
     func testDegradationIsReportedWhenTheKeychainIsUnusable() {
         let mirrorFile = tempFile(); defer { try? FileManager.default.removeItem(at: mirrorFile) }
         let store = LayeredSecureStore(primary: FlakySecureStore(failingKeys: nil),

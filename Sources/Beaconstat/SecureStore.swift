@@ -264,7 +264,12 @@ final class LayeredSecureStore: SecureStore, KeychainAccessGroupConfigurable {
         if key.isMirrorable, let value = mirror?.string(forKey: key) {
             // Read-through: heal the Keychain if it works again, so the mirror
             // stops being the source of truth (and stops reporting degraded).
-            if primaryTrusted, primary.set(value, forKey: key) { return value }
+            if primaryTrusted {
+                if primary.set(value, forKey: key) { return value }
+                // The heal failed, so the Keychain is not authoritative for this
+                // key either — stop consulting it before it can shadow the mirror.
+                distrustPrimary(key)
+            }
             degrade("read \(key.rawValue) from the on-disk mirror — the Keychain did not have it")
             return value
         }
