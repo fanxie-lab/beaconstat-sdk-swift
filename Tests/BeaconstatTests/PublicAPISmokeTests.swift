@@ -8,7 +8,10 @@ import XCTest
 final class PublicAPISmokeTests: XCTestCase {
     func testPublicAPIIsCallableAndDoesNotCrash() {
         var options = BeaconstatOptions()
-        options.endpoint = URL(string: "http://sdk-test.invalid") // never resolves — no live network
+        // Never resolves, so no live network. `https` on purpose: the SDK now
+        // rejects a cleartext endpoint unless opted in (M11), and this smoke
+        // test should exercise the shape a host actually ships.
+        options.endpoint = URL(string: "https://sdk-test.invalid")
         Beaconstat.configure(publicKey: "bcs_pub_test",
                              hmacSecret: String(repeating: "a", count: 64),
                              options: options)

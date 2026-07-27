@@ -57,7 +57,7 @@ final class BeaconstatCore {
              primary: KeychainSecureStore(),
              mirror: FileSecureStore(fileURL: BeaconstatCore.defaultIdentityFileURL())),
          clock: Clock = SystemClock(),
-         sessionProvider: @escaping (Configuration) -> URLSession = { _ in URLSession(configuration: .default) },
+         sessionProvider: @escaping (Configuration) -> URLSession = { _ in TelemetrySession.make() },
          bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "unknown",
          sdkVersion: String = BeaconstatVersion.current,
          queueFileURL: URL = BeaconstatCore.defaultQueueFileURL(),

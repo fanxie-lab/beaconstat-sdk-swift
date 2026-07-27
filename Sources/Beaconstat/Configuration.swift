@@ -20,6 +20,9 @@ struct Configuration {
     enum ValidationError: Error, Equatable {
         case invalidPublicKey
         case invalidHmacSecret
+        /// The endpoint is not `https://` and `allowInsecureEndpoint` was not
+        /// set — or its scheme isn't HTTP at all (M11).
+        case insecureEndpoint
     }
 
     static let defaultBaseURL = URL(string: "https://ingest.beaconstat.com")!
@@ -36,8 +39,36 @@ struct Configuration {
         }
         self.publicKey = publicKey
         self.hmacSecret = hmacSecret
-        (self.options, self.clampNotices) = Self.clamped(options)
-        self.baseURL = options.endpoint ?? Configuration.defaultBaseURL
+        var (clampedOptions, notices) = Self.clamped(options)
+        // Read from the clamped copy for consistency with everything else, even
+        // though `endpoint` itself isn't a numeric that gets clamped.
+        let endpoint = clampedOptions.endpoint ?? Configuration.defaultBaseURL
+        if let notice = try Self.validateEndpoint(endpoint,
+                                                 allowInsecure: clampedOptions.allowInsecureEndpoint) {
+            notices.append(notice)
+        }
+        clampedOptions.endpoint = endpoint
+        self.options = clampedOptions
+        self.clampNotices = notices
+        self.baseURL = endpoint
+    }
+
+    /// Rejects an endpoint that would put the site token and the HMAC signature
+    /// on the wire in cleartext (M11).
+    ///
+    /// - Returns: a notice to log when cleartext was explicitly allowed.
+    private static func validateEndpoint(_ url: URL, allowInsecure: Bool) throws -> String? {
+        guard let scheme = url.scheme?.lowercased(), let host = url.host, !host.isEmpty else {
+            throw ValidationError.insecureEndpoint
+        }
+        if scheme == "https" { return nil }
+        // The opt-in relaxes the check to `http`, not to `file`, `ftp` or
+        // anything else that happens to parse as a URL.
+        guard scheme == "http", allowInsecure else {
+            throw ValidationError.insecureEndpoint
+        }
+        return "endpoint \(scheme)://\(host) sends the site token and the request signature "
+            + "in cleartext — allowInsecureEndpoint is set, so this is intentional; never ship it"
     }
 
     /// Brings every numeric option inside `BeaconstatOptions.Limits`.

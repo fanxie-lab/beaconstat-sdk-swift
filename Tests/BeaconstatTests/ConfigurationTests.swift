@@ -66,7 +66,20 @@ final class ConfigurationTests: XCTestCase {
 
     func testEndpointOverrideWins() throws {
         var opts = BeaconstatOptions()
+        opts.endpoint = URL(string: "https://ingest.staging.example.com")!
+        let cfg = try Configuration(publicKey: "bcs_pub_abc",
+                                   hmacSecret: validHmac, options: opts)
+        XCTAssertEqual(cfg.baseURL, URL(string: "https://ingest.staging.example.com")!)
+    }
+
+    /// A cleartext override needs the explicit opt-in (M11) — see
+    /// `TransportHygieneTests` for the full scheme matrix.
+    func testCleartextEndpointOverrideRequiresTheOptIn() throws {
+        var opts = BeaconstatOptions()
         opts.endpoint = URL(string: "http://localhost:3000")!
+        XCTAssertThrowsError(try Configuration(publicKey: "bcs_pub_abc",
+                                              hmacSecret: validHmac, options: opts))
+        opts.allowInsecureEndpoint = true
         let cfg = try Configuration(publicKey: "bcs_pub_abc",
                                    hmacSecret: validHmac, options: opts)
         XCTAssertEqual(cfg.baseURL, URL(string: "http://localhost:3000")!)

@@ -62,7 +62,17 @@ public struct BeaconstatOptions: Sendable {
     public var debugLogging: Bool
     public var collectAccessibility: Bool
     /// Override the ingest base URL (dev / self-host). Defaults to production.
+    ///
+    /// Must be `https://` unless `allowInsecureEndpoint` is set.
     public var endpoint: URL?
+    /// Permit a cleartext `http://` endpoint (M11).
+    ///
+    /// `configure()` otherwise rejects a non-`https` endpoint, because the site
+    /// token and the HMAC request signature travel in headers: over `http` they
+    /// are readable and replayable by anything on the path. Set this only for
+    /// local development or an integration test against `http://localhost`, and
+    /// never in a shipping build. Even with it set, only `http` is allowed —
+    /// not `file`, `ftp`, or anything else that happens to parse as a URL.
     /// Keychain access group used to share one install identity between the host
     /// app and its extensions (M12).
     ///
@@ -109,6 +119,8 @@ public struct BeaconstatOptions: Sendable {
     /// The `x-idempotency-key` request header is sent either way and needs no
     /// server change to be safe; this option only controls the body field.
     public var sendEventIds: Bool
+    /// See `endpoint`. Defaults to `false`.
+    public var allowInsecureEndpoint: Bool
 
     public init(
         testMode: TestMode = .automatic,
@@ -124,7 +136,8 @@ public struct BeaconstatOptions: Sendable {
         keychainAccessGroup: String? = nil,
         productVersion: String? = nil,
         routeTestFlightToTest: Bool = false,
-        sendEventIds: Bool = false
+        sendEventIds: Bool = false,
+        allowInsecureEndpoint: Bool = false
     ) {
         self.testMode = testMode
         self.batchSize = batchSize
@@ -140,6 +153,7 @@ public struct BeaconstatOptions: Sendable {
         self.productVersion = productVersion
         self.routeTestFlightToTest = routeTestFlightToTest
         self.sendEventIds = sendEventIds
+        self.allowInsecureEndpoint = allowInsecureEndpoint
     }
 
     /// `productVersion` on the wire, defaulted when the host didn't set one

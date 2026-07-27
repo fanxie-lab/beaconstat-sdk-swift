@@ -56,6 +56,39 @@ enum HTTPStatusClassifier {
     }
 }
 
+/// The `URLSession` the SDK sends telemetry on (M11).
+///
+/// `URLSession(configuration: .default)` shares the host app's
+/// `HTTPCookieStorage` — so a `Set-Cookie` from the ingest host is stored and
+/// replayed on the app's own requests — and its `URLCache`. Neither has any
+/// business being touched by an analytics transport.
+enum TelemetrySession {
+    /// Idle timeout per request. The 60 s default is a long time to hold a
+    /// background assertion open for a request that is not going to complete,
+    /// and the queue is durable, so giving up early costs nothing (H2).
+    static let requestTimeout: TimeInterval = 15
+    /// Ceiling on one whole request including retries inside URLSession.
+    static let resourceTimeout: TimeInterval = 60
+
+    static func make(timeout: TimeInterval = TelemetrySession.requestTimeout) -> URLSession {
+        // `.ephemeral` already keeps cookies and cache in memory; nil-ing them
+        // states the intent and removes them entirely.
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = timeout
+        configuration.timeoutIntervalForResource = resourceTimeout
+        // Backoff, reachability and the durable queue are the SDK's own job;
+        // letting URLSession park a request indefinitely would sit underneath
+        // all three.
+        configuration.waitsForConnectivity = false
+        return URLSession(configuration: configuration)
+    }
+}
+
 /// Thin URLSession transport. Signing/timestamps are computed by the core and
 /// passed in — Transport never re-encodes the body.
 final class Transport {
