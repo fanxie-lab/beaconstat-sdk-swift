@@ -489,30 +489,49 @@ final class BeaconstatCore {
         enqueue(Event(name: name, time: clock.nowISO8601(), properties: props))
     }
 
+    /// Host-supplied scalars bound for reserved `_bcs.apple.*` dimensions.
+    ///
+    /// These used to go onto the wire verbatim while `track()` enforced a key
+    /// regex, a value cap and a key cap — so a dynamic quick action encoding a
+    /// target (`"openChat:user@example.com"`) leaked PII onto a reserved
+    /// dimension and blew up its cardinality (M2). `nil` values are omitted, as
+    /// before; unsalvageable ones are dropped and logged **by key only**.
+    private func reserved(_ pairs: [String: String?]) -> [String: String] {
+        var out: [String: String] = [:]
+        for (key, value) in pairs.sorted(by: { $0.key < $1.key }) {
+            guard let value else { continue }
+            guard let label = ReservedValue.sanitize(value) else {
+                logger.debug("dropping unsafe value for reserved key: \(key)")
+                continue
+            }
+            out[key] = label
+        }
+        return out
+    }
+
     func trackShortcut(_ type: String) {
         queue.async {
             guard !self.isOptedOut, self.configuration != nil else { return }
             self.emitAppleEntry(name: "_bcs.apple.opened_from_shortcut",
-                                props: ["_bcs.apple.shortcut_type": type])
+                                props: self.reserved(["_bcs.apple.shortcut_type": type]))
         }
     }
 
     func trackWidget(kind: String?, family: String?) {
         queue.async {
             guard !self.isOptedOut, self.configuration != nil else { return }
-            var props: [String: String] = [:]
-            if let kind { props["_bcs.apple.widget_kind"] = kind }
-            if let family { props["_bcs.apple.widget_family"] = family }
-            self.emitAppleEntry(name: "_bcs.apple.opened_from_widget", props: props)
+            self.emitAppleEntry(name: "_bcs.apple.opened_from_widget",
+                                props: self.reserved(["_bcs.apple.widget_kind": kind,
+                                                      "_bcs.apple.widget_family": family]))
         }
     }
 
     func trackPushReceived(category: String?, wasSilent: Bool) {
         queue.async {
             guard !self.isOptedOut, self.configuration != nil else { return }
-            var props: [String: String] = ["_bcs.apple.push_was_silent": wasSilent ? "true" : "false"]
-            if let category { props["_bcs.apple.push_category"] = category }
             // Only category + was_silent — NEVER the notification body/title/userInfo.
+            var props = self.reserved(["_bcs.apple.push_category": category])
+            props["_bcs.apple.push_was_silent"] = wasSilent ? "true" : "false"
             self.emitAppleEntry(name: "_bcs.apple.push_received", props: props)
         }
     }
@@ -520,11 +539,10 @@ final class BeaconstatCore {
     func trackPushOpened(category: String?, actionId: String?) {
         queue.async {
             guard !self.isOptedOut, self.configuration != nil else { return }
-            var props: [String: String] = [:]
-            if let category { props["_bcs.apple.push_category"] = category }
-            if let actionId { props["_bcs.apple.push_action_id"] = actionId }
             // Only category + action id — NEVER the notification body/title/userInfo.
-            self.emitAppleEntry(name: "_bcs.apple.push_opened", props: props)
+            self.emitAppleEntry(name: "_bcs.apple.push_opened",
+                                props: self.reserved(["_bcs.apple.push_category": category,
+                                                      "_bcs.apple.push_action_id": actionId]))
         }
     }
 
