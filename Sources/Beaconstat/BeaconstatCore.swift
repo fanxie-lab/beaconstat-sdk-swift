@@ -434,7 +434,11 @@ final class BeaconstatCore {
                 self.logger.debug("dropping invalid event name: \(name)"); return
             }
             var clean: [String: String] = [:]
-            for (k, v) in properties {
+            // Sorted, not raw dictionary order: which 49 of an over-cap property
+            // set survive used to depend on Swift's per-instance hash seed, so
+            // two identical `track()` calls in the same process could keep
+            // different columns (L7).
+            for (k, v) in properties.sorted(by: { $0.key < $1.key }) {
                 guard EventValidation.isValidUserKey(k) else {
                     self.logger.debug("dropping invalid property key: \(k)"); continue
                 }
