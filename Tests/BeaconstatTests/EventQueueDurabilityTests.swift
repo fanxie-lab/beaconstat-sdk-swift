@@ -10,7 +10,16 @@ final class EventQueueDurabilityTests: XCTestCase {
         FileManager.default.temporaryDirectory.appendingPathComponent("bcs-\(UUID().uuidString).json")
     }
     private func log() -> Logger { Logger(enabled: false, sink: { _ in }) }
-    private func ev(_ n: Int) -> Event { Event(name: "e\(n)", time: "t\(n)") }
+    /// Memoised: `Event` now carries a unique `id` (H6), so building "the same"
+    /// event twice would produce two non-equal values and break every
+    /// order/content assertion below.
+    private var madeEvents: [Int: Event] = [:]
+    private func ev(_ n: Int) -> Event {
+        if let existing = madeEvents[n] { return existing }
+        let event = Event(name: "e\(n)", time: "t\(n)")
+        madeEvents[n] = event
+        return event
+    }
 
     /// The review's test gap 7, inverted: dequeue, drop the instance, reload
     /// from disk. Under the old contract the batch was gone.

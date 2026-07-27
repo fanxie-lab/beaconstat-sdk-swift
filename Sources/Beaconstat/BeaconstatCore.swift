@@ -620,10 +620,15 @@ extension BeaconstatCore {
         guard !batch.isEmpty else { return }
         let body = EventBatch(productVersion: config.options.productVersionOrDefault,
                               environment: environment, events: batch)
-        guard let bodyData = try? PayloadEncoder.encode(body) else {
+        guard let bodyData = try? PayloadEncoder.encode(
+            body, includeEventIds: config.options.sendEventIds) else {
             logger.debug("could not encode a batch of \(batch.count) event(s) — leaving it queued")
             return
         }
+        // Derived from the events' own ids, which never change, so a retry of
+        // this batch presents the same key and the server can suppress the
+        // replay caused by a lost 202 (H6).
+        let idempotencyKey = IdempotencyKey.forBatch(batch)
         let timestamp = clock.nowISO8601()
         // Sign the exact bytes that will be transmitted; Transport never
         // re-encodes. Do not move either of these across the other.
@@ -636,7 +641,8 @@ extension BeaconstatCore {
         flushing = true
         outstandingNetworkOps += 1
         transport.sendBatch(bodyData: bodyData, apiKey: config.publicKey, siteToken: siteToken,
-                            signature: signature, timestamp: timestamp, isTest: routesToTest) { [weak self] result in
+                            signature: signature, timestamp: timestamp, isTest: routesToTest,
+                            idempotencyKey: idempotencyKey) { [weak self] result in
             self?.queue.async {
                 guard let self else { return }
                 self.outstandingNetworkOps -= 1

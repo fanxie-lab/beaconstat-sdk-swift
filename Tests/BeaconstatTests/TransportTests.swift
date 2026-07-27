@@ -34,7 +34,7 @@ final class TransportTests: XCTestCase {
         let exp = expectation(description: "send")
         transport().sendBatch(bodyData: body, apiKey: "bcs_pub_x", siteToken: "bcs_tok_abc",
                              signature: "deadbeef", timestamp: "2026-04-19T10:30:00.000Z",
-                             isTest: false) { result in
+                             isTest: false, idempotencyKey: "idem-abc") { result in
             guard case .success = result else { return XCTFail("expected success") }
             exp.fulfill()
         }
@@ -44,6 +44,7 @@ final class TransportTests: XCTestCase {
         XCTAssertEqual(req.value(forHTTPHeaderField: "x-site-token"), "bcs_tok_abc")
         XCTAssertEqual(req.value(forHTTPHeaderField: "x-signature"), "deadbeef")
         XCTAssertEqual(req.value(forHTTPHeaderField: "x-timestamp"), "2026-04-19T10:30:00.000Z")
+        XCTAssertEqual(req.value(forHTTPHeaderField: "x-idempotency-key"), "idem-abc")
         XCTAssertEqual(MockURLProtocol.capturedBodies.first, body) // exact bytes preserved
     }
 
@@ -51,7 +52,8 @@ final class TransportTests: XCTestCase {
         MockURLProtocol.handler = { _ in .init(statusCode: 202) }
         let exp = expectation(description: "send")
         transport().sendBatch(bodyData: Data("{}".utf8), apiKey: "k", siteToken: "t",
-                             signature: "s", timestamp: "ts", isTest: true) { _ in exp.fulfill() }
+                             signature: "s", timestamp: "ts", isTest: true,
+                             idempotencyKey: "k") { _ in exp.fulfill() }
         wait(for: [exp], timeout: 2)
         XCTAssertEqual(MockURLProtocol.capturedRequests.first?.url?.absoluteString,
                        "https://ingest.beaconstat.com/v1/debug/events")
@@ -64,7 +66,7 @@ final class TransportTests: XCTestCase {
             MockURLProtocol.handler = { _ in .init(statusCode: code) }
             let exp = expectation(description: "s\(code)")
             transport().sendBatch(bodyData: Data(), apiKey: "k", siteToken: "t", signature: "s",
-                                 timestamp: "ts", isTest: false) { result in
+                                 timestamp: "ts", isTest: false, idempotencyKey: "k") { result in
                 guard case .failure(let e) = result else { return XCTFail("expected failure") }
                 XCTAssertEqual(e, expected)
                 exp.fulfill()

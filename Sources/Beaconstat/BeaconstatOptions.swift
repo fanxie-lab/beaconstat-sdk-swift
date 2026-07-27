@@ -97,6 +97,18 @@ public struct BeaconstatOptions: Sendable {
     /// endpoint. Defaults to `false` — TestFlight is a pre-release channel
     /// closer to production; opt in if you want beta data segregated.
     public var routeTestFlightToTest: Bool
+    /// Put each event's stable idempotency `id` in the request body (H6).
+    ///
+    /// **Leave this `false` unless your ingest deployment accepts the field.**
+    /// The reference API validates with `forbidNonWhitelisted: true` and its
+    /// `EventDto` declares only `name`/`time`/`properties`, so an unknown `id`
+    /// does not get stripped — it returns `400 property id should not exist`
+    /// and rejects the **whole batch**. Enabling it against such a server is a
+    /// complete ingest outage, not a partial degradation.
+    ///
+    /// The `x-idempotency-key` request header is sent either way and needs no
+    /// server change to be safe; this option only controls the body field.
+    public var sendEventIds: Bool
 
     public init(
         testMode: TestMode = .automatic,
@@ -111,7 +123,8 @@ public struct BeaconstatOptions: Sendable {
         endpoint: URL? = nil,
         keychainAccessGroup: String? = nil,
         productVersion: String? = nil,
-        routeTestFlightToTest: Bool = false
+        routeTestFlightToTest: Bool = false,
+        sendEventIds: Bool = false
     ) {
         self.testMode = testMode
         self.batchSize = batchSize
@@ -126,6 +139,7 @@ public struct BeaconstatOptions: Sendable {
         self.keychainAccessGroup = keychainAccessGroup
         self.productVersion = productVersion
         self.routeTestFlightToTest = routeTestFlightToTest
+        self.sendEventIds = sendEventIds
     }
 
     /// `productVersion` on the wire, defaulted when the host didn't set one

@@ -59,8 +59,13 @@ final class Transport {
         }.resume()
     }
 
+    /// - Parameter idempotencyKey: stable across retries of the same batch, so
+    ///   the server can suppress a replay caused by a lost 202 (H6). Sent as a
+    ///   header rather than a body field because the ingest DTO rejects unknown
+    ///   body properties outright — see `PayloadEncoder.encode`. Outside the
+    ///   signature's canonical payload, so it cannot invalidate it.
     func sendBatch(bodyData: Data, apiKey: String, siteToken: String, signature: String,
-                   timestamp: String, isTest: Bool,
+                   timestamp: String, isTest: Bool, idempotencyKey: String,
                    completion: @escaping (Result<Void, TransportError>) -> Void) {
         let path = isTest ? "v1/debug/events" : "v1/events"
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
@@ -70,6 +75,7 @@ final class Transport {
         request.setValue(siteToken, forHTTPHeaderField: "x-site-token")
         request.setValue(signature, forHTTPHeaderField: "x-signature")
         request.setValue(timestamp, forHTTPHeaderField: "x-timestamp")
+        request.setValue(idempotencyKey, forHTTPHeaderField: "x-idempotency-key")
         request.httpBody = bodyData
         session.dataTask(with: request) { _, response, error in
             if error != nil { completion(.failure(.network)); return }

@@ -12,7 +12,16 @@ final class EventQueueEvictionTests: XCTestCase {
         func save(_ e: [Event]) -> Bool { events = e; return true }
     }
     private func log() -> Logger { Logger(enabled: false, sink: { _ in }) }
-    private func ev(_ n: Int) -> Event { Event(name: "e\(n)", time: "t\(n)") }
+    /// Memoised: `Event` now carries a unique `id` (H6), so building "the same"
+    /// event twice would produce two non-equal values and break every
+    /// order/content assertion below.
+    private var madeEvents: [Int: Event] = [:]
+    private func ev(_ n: Int) -> Event {
+        if let existing = madeEvents[n] { return existing }
+        let event = Event(name: "e\(n)", time: "t\(n)")
+        madeEvents[n] = event
+        return event
+    }
     private func install() -> Event { Event(name: "_bcs.install_detected", time: "t0") }
     private func session(_ n: Int = 0) -> Event { Event(name: "_bcs.session_started", time: "s\(n)") }
     private func updated() -> Event { Event(name: "_bcs.apple.app_updated", time: "u0") }
