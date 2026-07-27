@@ -1,15 +1,50 @@
 # Changelog
 
-## 2.0.0
+## 1.1.0
+
+> ## ⚠️ THIS RELEASE CONTAINS BREAKING CHANGES
+>
+> Do not upgrade without reading [MIGRATION.md](MIGRATION.md). Despite the minor
+> version number, **this release can break your build and will change your
+> data.**
+>
+> **Breaks the build** (one item, and the compiler will point at it):
+>
+> 1. **`configure` is now `@MainActor`.** Any call from a background thread or a
+>    detached task no longer compiles.
+>
+> **Breaks silently at runtime** — these compile fine and behave differently:
+>
+> 2. **`collectAccessibility` now defaults to `false`.** The `accessibility.*`
+>    keys stop arriving unless you opt in.
+> 3. **A non-`https` `endpoint` is now rejected.** The SDK refuses to configure
+>    unless you also set `allowInsecureEndpoint = true`.
+> 4. **`optOut()` now deletes local identity.** A later `optIn()` is a brand-new
+>    anonymous install, with a new `install_detected` and
+>    `is_first_session=true`.
+> 5. **Out-of-range `BeaconstatOptions` numerics are clamped**, not used as
+>    given.
+> 6. **`BeaconstatOptions.init` gained three parameters**
+>    (`keychainAccessGroup`, `sendEventIds`, `allowInsecureEndpoint`), one of
+>    them inserted mid-list, so a fully positional memberwise call binds
+>    differently.
+> 7. **Reserved Apple-entry values are sanitised** — a quick-action type, widget
+>    kind, push category or action id may now be truncated at a delimiter or
+>    dropped entirely.
+> 8. **macOS `app_backgrounded` means something different**, and historic macOS
+>    data is not comparable. watchOS now emits lifecycle events where it emitted
+>    none.
+> 9. **Keychain items moved** to `…ThisDeviceOnly`, and a new `identity.json`
+>    file appears alongside `queue.json`.
+>
+> All nine are covered with before/after code in
+> [MIGRATION.md](MIGRATION.md).
 
 A correctness release. An adversarial review of 1.0.0 found 1 Critical, 6 High,
 14 Medium and 10 Low issues; all of them are fixed here, along with the review's
 eleven test gaps. **Every adopter should upgrade** — 1.0.0 could silently stop
 sending for an entire app run, and silently lose data in several ordinary
 situations.
-
-Breaking changes are listed in [MIGRATION.md](MIGRATION.md). Most hosts need
-only a one-line change; the compiler catches the rest.
 
 ### Fixed — data loss and delivery
 
@@ -96,7 +131,7 @@ only a one-line change; the compiler catches the rest.
   Control; a Mac user switching apps 200×/day produced 200
   `_bcs.apple.app_backgrounded` events and 200 POSTs. `app_backgrounded` is now
   `didHide` / `willTerminate`; losing focus flushes and emits nothing.
-  **Historic macOS `app_backgrounded` data is not comparable with 2.0.0 data.**
+  **Historic macOS `app_backgrounded` data is not comparable with 1.1.0 data.**
 - `Package.swift` declares iOS 15, macOS 12, tvOS 15, watchOS 8 and visionOS 1.
   Undeclared platforms previously inherited the toolchain's default deployment
   target.
@@ -156,7 +191,7 @@ only a one-line change; the compiler catches the rest.
 
 ### Testing
 
-- 116 tests at 1.0.0 → 400 at 2.0.0, green in both Debug and Release
+- 116 tests at 1.0.0 → 400 at 1.1.0, green in both Debug and Release
   configurations and under ThreadSanitizer.
 - `swift test -c release` now compiles at all. It did not at 1.0.0, so the
   Release-only paths — `.automatic` routing to `/v1/events`, and the four-hour
@@ -182,9 +217,9 @@ First stable release.
 >   no scrubbing code. The API is safe by *construction* — it never accepts
 >   `userInfo`, so there is no payload to scrub — but the scalars it does accept
 >   (`category`, `actionId`) were **not** sanitised and reached the wire
->   verbatim. 2.0.0 sanitises them.
+>   verbatim. 1.1.0 sanitises them.
 > - Request signing was described as "wire-verified against the backend".
->   Nothing in the repository evidenced that. 2.0.0 makes it true: a shared
+>   Nothing in the repository evidenced that. 1.1.0 makes it true: a shared
 >   golden vector is asserted by tests on both the SDK and the API side.
 
 - Zero-dependency SPM package; iOS 15+ / macOS 12+. tvOS/watchOS/visionOS code

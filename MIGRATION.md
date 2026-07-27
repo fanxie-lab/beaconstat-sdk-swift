@@ -1,12 +1,27 @@
-# Migrating from 1.0.0 to 2.0.0
+# Migrating from 1.0.0 to 1.1.0
 
-Every item below was verified against the shipped 2.0.0 source, not against a
+**This release contains breaking changes.** One of them breaks the build; the
+other eight compile cleanly and change behaviour. Read this before upgrading.
+
+| # | Change | Breaks | Section |
+|---|---|---|---|
+| 1 | `configure` is `@MainActor` | **the build** | [§1](#1-configure-is-now-mainactor--a-hard-compile-error-off-main) |
+| 2 | `BeaconstatOptions.init` gained three parameters, one mid-list | the build, if you call it positionally | [§2](#2-beaconstatoptionsinit-gained-three-parameters) |
+| 3 | `collectAccessibility` defaults to `false` | your data | [§3](#3-collectaccessibility-now-defaults-to-false) |
+| 4 | non-`https` endpoints rejected | runtime config | [§4](#4-non-https-endpoints-are-rejected) |
+| 5 | `optOut()` purges local identity | your data | [§5](#5-optout-now-purges-local-identity) |
+| 6 | option numerics are clamped | runtime tuning | [§6](#6-out-of-range-option-numerics-are-clamped) |
+| 7 | macOS/watchOS lifecycle semantics changed | your data | [§7](#7-behaviour-changes-that-affect-your-data) |
+| 8 | reserved Apple-entry values sanitised | your data | [§7](#7-behaviour-changes-that-affect-your-data) |
+| 9 | Keychain items moved; new `identity.json` | on-disk state | [§8](#8-new-on-disk-and-keychain-state) |
+
+Every item below was verified against the shipped 1.1.0 source, not against a
 plan. Items are ordered by how likely they are to affect you.
 
 **Summary for the impatient:** if you call `Beaconstat.configure(...)` from
 `App.init` or `didFinishLaunching`, use the default options, and don't call
 `optOut()`, you need **no source changes at all** — but read
-[§7](#7-behaviour-changes-that-affect-your-data) before you compare 2.0.0 data
+[§7](#7-behaviour-changes-that-affect-your-data) before you compare 1.1.0 data
 with 1.0.0 data.
 
 ---
@@ -26,7 +41,7 @@ DispatchQueue.global().async {
 ```
 
 ```swift
-// 2.0.0 — call it from a main-actor context
+// 1.1.0 — call it from a main-actor context
 @main
 struct MyApp: App {
     init() {                                   // App.init is main-actor
@@ -63,7 +78,7 @@ calls break.** If you construct options with `var options = BeaconstatOptions()`
 and assign properties — the documented pattern — nothing changes.
 
 ```swift
-// 2.0.0 memberwise signature, in order:
+// 1.1.0 memberwise signature, in order:
 BeaconstatOptions(
     testMode:               TestMode        = .automatic,
     batchSize:              Int             = 50,
@@ -93,7 +108,7 @@ argument labels.
 ## 3. `collectAccessibility` now defaults to `false`
 
 ```swift
-// 2.0.0 — opt in explicitly if you want these keys back
+// 1.1.0 — opt in explicitly if you want these keys back
 var options = BeaconstatOptions()
 options.collectAccessibility = true
 ```
@@ -107,7 +122,7 @@ them puts a disclosure obligation in **your** privacy manifest. Turn it on when
 you are actually going to act on the data.
 
 **Data impact:** if you leave it off, `accessibility.*` stops arriving. Any
-dashboard segment built on those keys goes empty for 2.0.0 installs.
+dashboard segment built on those keys goes empty for 1.1.0 installs.
 
 ---
 
@@ -117,7 +132,7 @@ dashboard segment built on those keys goes empty for 2.0.0 installs.
 // 1.0.0 — accepted silently
 options.endpoint = URL(string: "http://localhost:3000")
 
-// 2.0.0 — the SDK refuses to configure and logs `insecureEndpoint`
+// 1.1.0 — the SDK refuses to configure and logs `insecureEndpoint`
 options.endpoint = URL(string: "http://localhost:3000")
 options.allowInsecureEndpoint = true          // required, and logged as a warning
 ```
@@ -134,11 +149,11 @@ as a URL. Never ship it.
 ```swift
 Beaconstat.optOut()
 // 1.0.0: stopped sending. install_id, site token and session history stayed.
-// 2.0.0: also deletes install_id, the site token and session history, stops the
+// 1.1.0: also deletes install_id, the site token and session history, stops the
 //        network-path monitor, removes the lifecycle observers, cancels timers,
 //        and clears the on-disk queue.
 Beaconstat.optIn()
-// 2.0.0: this is a NEW anonymous install. It emits _bcs.install_detected and
+// 1.1.0: this is a NEW anonymous install. It emits _bcs.install_detected and
 //        _bcs.is_first_session=true, with a different fingerprint.
 ```
 
@@ -181,10 +196,10 @@ No code change needed, but your dashboards will notice.
 1.0.0 mapped it to `NSApplication.didResignActiveNotification`, which fires on
 ⌘-Tab, on clicking another window, and on Mission Control. A Mac user switching
 apps 200×/day produced 200 `_bcs.apple.app_backgrounded` events and 200 HTTP
-POSTs. 2.0.0 emits it on `didHide` (⌘H) and `willTerminate` only; losing focus
+POSTs. 1.1.0 emits it on `didHide` (⌘H) and `willTerminate` only; losing focus
 flushes and emits nothing.
 
-**Historic macOS `app_backgrounded` counts are not comparable with 2.0.0
+**Historic macOS `app_backgrounded` counts are not comparable with 1.1.0
 counts** — expect them to fall by an order of magnitude. That is the bug being
 fixed, not a regression.
 
@@ -197,7 +212,7 @@ now fire, so watchOS session counts will rise from artificially low numbers.
 ### visionOS now compiles, and reports no screen metrics
 
 1.0.0 advertised visionOS but did not build for it (`UIScreen` is unavailable
-there). 2.0.0 builds, and deliberately omits `device.screen_width`,
+there). 1.1.0 builds, and deliberately omits `device.screen_width`,
 `_height` and `_scale` on visionOS — a visionOS app has no screen, it has
 volumes and windows the user resizes in space.
 
@@ -205,7 +220,7 @@ volumes and windows the user resizes in space.
 
 If you saw implausible install growth on macOS or from background launches,
 that was 1.0.0 minting a fresh install id whenever the Keychain refused a write.
-2.0.0 keeps a durable on-disk mirror and stays silent rather than reporting a
+1.1.0 keeps a durable on-disk mirror and stays silent rather than reporting a
 phantom install. Expect *lower*, more accurate install and first-session counts.
 
 ### Reserved Apple values may be truncated or dropped

@@ -20,12 +20,13 @@ Or in `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/fanxie-lab/beaconstat-sdk-swift", from: "2.0.0")
+    .package(url: "https://github.com/fanxie-lab/beaconstat-sdk-swift", from: "1.1.0")
 ]
 ```
 
-Upgrading from 1.0.0? See [MIGRATION.md](MIGRATION.md). The only change that can
-break a build is that `configure` is now `@MainActor`.
+**Upgrading from 1.0.0?** 1.1.0 contains breaking changes — read
+[MIGRATION.md](MIGRATION.md) first. `configure` is now `@MainActor` (the only
+change that breaks a build), and several defaults and behaviours changed.
 
 ## Quick start
 

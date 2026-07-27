@@ -57,7 +57,11 @@ final class WireGoldenVectorTests: XCTestCase {
             environment: ["device.platform": "ios",
                           "device.os_version": "17.4",
                           "sdk.name": "beaconstat-swift",
-                          "sdk.version": "2.0.0"],
+                          // Frozen fixture value, deliberately NOT read from
+                          // `BeaconstatVersion.current`: the golden bytes must
+                          // not be invalidated by every release. It happens to
+                          // equal the 1.1.0 version; it need not stay that way.
+                          "sdk.version": "1.1.0"],
             events: [
                 Event(name: "_bcs.install_detected", time: "2026-04-19T10:30:00.000Z",
                       properties: ["_bcs.session.id": sessionId], id: installEventId),
@@ -72,7 +76,7 @@ final class WireGoldenVectorTests: XCTestCase {
     /// Raw string literal so the inner quotes are literal and this is
     /// byte-identical to what goes out. 459 bytes.
     // swiftlint:disable line_length
-    static let expectedBody = #"{"environment":{"device.os_version":"17.4","device.platform":"ios","sdk.name":"beaconstat-swift","sdk.version":"2.0.0"},"events":[{"name":"_bcs.install_detected","properties":{"_bcs.session.id":"3f2504e0-4f89-11d3-9a0c-0305e82c3301"},"time":"2026-04-19T10:30:00.000Z"},{"name":"feature_used","properties":{"_bcs.session.id":"3f2504e0-4f89-11d3-9a0c-0305e82c3301","feature":"export","format":"pdf"},"time":"2026-04-19T10:30:01.250Z"}],"productVersion":"1.5.0"}"#
+    static let expectedBody = #"{"environment":{"device.os_version":"17.4","device.platform":"ios","sdk.name":"beaconstat-swift","sdk.version":"1.1.0"},"events":[{"name":"_bcs.install_detected","properties":{"_bcs.session.id":"3f2504e0-4f89-11d3-9a0c-0305e82c3301"},"time":"2026-04-19T10:30:00.000Z"},{"name":"feature_used","properties":{"_bcs.session.id":"3f2504e0-4f89-11d3-9a0c-0305e82c3301","feature":"export","format":"pdf"},"time":"2026-04-19T10:30:01.250Z"}],"productVersion":"1.5.0"}"#
 
     /// With `sendEventIds = true`. 547 bytes. Off by default because the
     /// reference API's `EventDto` does not declare `id` and the pipe runs
@@ -80,14 +84,14 @@ final class WireGoldenVectorTests: XCTestCase {
     /// returns `400 property id should not exist` and rejects the **whole
     /// batch**. Pinned anyway, so the day ingest adds the field the client half
     /// is already specified.
-    static let expectedBodyWithIds = #"{"environment":{"device.os_version":"17.4","device.platform":"ios","sdk.name":"beaconstat-swift","sdk.version":"2.0.0"},"events":[{"id":"11111111-2222-3333-4444-555555555555","name":"_bcs.install_detected","properties":{"_bcs.session.id":"3f2504e0-4f89-11d3-9a0c-0305e82c3301"},"time":"2026-04-19T10:30:00.000Z"},{"id":"66666666-7777-8888-9999-aaaaaaaaaaaa","name":"feature_used","properties":{"_bcs.session.id":"3f2504e0-4f89-11d3-9a0c-0305e82c3301","feature":"export","format":"pdf"},"time":"2026-04-19T10:30:01.250Z"}],"productVersion":"1.5.0"}"#
+    static let expectedBodyWithIds = #"{"environment":{"device.os_version":"17.4","device.platform":"ios","sdk.name":"beaconstat-swift","sdk.version":"1.1.0"},"events":[{"id":"11111111-2222-3333-4444-555555555555","name":"_bcs.install_detected","properties":{"_bcs.session.id":"3f2504e0-4f89-11d3-9a0c-0305e82c3301"},"time":"2026-04-19T10:30:00.000Z"},{"id":"66666666-7777-8888-9999-aaaaaaaaaaaa","name":"feature_used","properties":{"_bcs.session.id":"3f2504e0-4f89-11d3-9a0c-0305e82c3301","feature":"export","format":"pdf"},"time":"2026-04-19T10:30:01.250Z"}],"productVersion":"1.5.0"}"#
     // swiftlint:enable line_length
 
     /// `openssl dgst -sha256` over `expectedBody`.
-    static let expectedBodyHash = "43234fae1506a8ef6100aed2c504885ba5985b9f0d0d60e3d57479e5ba34e269"
+    static let expectedBodyHash = "57871e0d1d11e72401cea0682e2cb29a585b73540ad596f9c870bcef1563af1a"
     /// `openssl dgst -sha256 -hmac <hmacSecret>` over
     /// `"<timestamp>.<publicKey>.<expectedBodyHash>"`.
-    static let expectedSignature = "9c8be38825fe6973550a821f76f3f420fef90362c7f39548076005b73b46dd25"
+    static let expectedSignature = "3f05497822bfcf725495a0f3c4935d33d8e4043643e5075633bb34937208e6af"
     /// `sha256` of the two event ids joined by a newline.
     static let expectedIdempotencyKey =
         "0490254363a40918e6b658ebdea0eb3867097e51f1940dad6eb0544d794d936c"

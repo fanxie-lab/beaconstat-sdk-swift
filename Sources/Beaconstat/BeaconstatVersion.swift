@@ -6,5 +6,5 @@
 /// wire (L5). The value comes from here, via `EnvironmentCollector`, in the
 /// facade.
 enum BeaconstatVersion {
-    static let current = "2.0.0"
+    static let current = "1.1.0"
 }

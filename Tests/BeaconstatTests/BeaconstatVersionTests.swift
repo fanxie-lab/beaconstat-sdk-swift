@@ -3,7 +3,7 @@ import XCTest
 
 final class BeaconstatVersionTests: XCTestCase {
     func testVersionMatchesTheRelease() {
-        XCTAssertEqual(BeaconstatVersion.current, "2.0.0")
+        XCTAssertEqual(BeaconstatVersion.current, "1.1.0")
     }
 
     /// The version has to actually reach the wire. The core used to carry a
@@ -14,7 +14,7 @@ final class BeaconstatVersionTests: XCTestCase {
         let collector = EnvironmentCollector(sdkVersion: BeaconstatVersion.current,
                                              appVersion: nil, appBuild: nil,
                                              collectAccessibility: false)
-        XCTAssertEqual(collector.collectDeferrable()["sdk.version"], "2.0.0")
+        XCTAssertEqual(collector.collectDeferrable()["sdk.version"], "1.1.0")
     }
 
     func testVersionIsSemver() {

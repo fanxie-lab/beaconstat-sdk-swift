@@ -7,7 +7,7 @@ on:
 
 jobs:
   # Debug and Release are separate matrix legs, not one job running both.
-  # `swift test -c release` did not even compile until 2.0.0 (`onQuiescent` was
+  # `swift test -c release` did not even compile until 1.1.0 (`onQuiescent` was
   # `#if DEBUG`), so the two behaviours that exist only in Release — `.automatic`
   # routing sending to /v1/events, and the 4-hour default flushInterval — had
   # never been executed by a test anywhere.
@@ -77,7 +77,7 @@ jobs:
 
   # Every platform Package.swift declares, built in Release.
   #
-  # Only iOS and macOS were declared before 2.0.0, so tvOS, watchOS and visionOS
+  # Only iOS and macOS were declared before 1.1.0, so tvOS, watchOS and visionOS
   # inherited the toolchain's default deployment target and none of them was in
   # CI. That is how watchOS shipped 1.0.0 with no lifecycle events at all, and
   # how visionOS shipped advertised but uncompilable — `UIScreen` is

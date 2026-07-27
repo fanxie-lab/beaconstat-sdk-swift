@@ -17,7 +17,7 @@ struct BeaconstatSampleApp: App {
         var options = BeaconstatOptions()
         options.debugLogging = true          // → log stream --predicate 'subsystem == "com.beaconstat.sdk"'
         options.flushInterval = 60           // clamped into BeaconstatOptions.Limits
-        options.collectAccessibility = false // the default since 2.0.0; opt in deliberately
+        options.collectAccessibility = false // the default since 1.1.0; opt in deliberately
 
         // Only needed if an extension target also calls the SDK. Both targets
         // need the Keychain Sharing entitlement for this group.
