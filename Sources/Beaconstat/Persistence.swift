@@ -53,12 +53,38 @@ final class FileEventStore: EventStore {
         do {
             let data = try JSONEncoder().encode(events)
             try data.write(to: fileURL, options: .atomic)
+            excludeFromBackup()
             return true
         } catch {
             // Disk-full, a data-protection denial before first unlock, or a
             // sandbox refusal. Previously two `try?` swallowed all three.
             logger.debug("\(events.count) queued event(s) could not be persisted: \(error)")
             return false
+        }
+    }
+
+    /// Keeps transient telemetry out of iCloud/iTunes backups (L4). Restoring a
+    /// backup onto a second device would otherwise replay whatever happened to
+    /// be queued when it was taken.
+    ///
+    /// Applied to the queue FILE, never to its directory. `identity.json` lives
+    /// in the same directory and Wave 1 made it deliberately durable;
+    /// `isExcludedFromBackup` on a directory is inherited by everything inside
+    /// it, so excluding the directory would silently take identity with it and
+    /// a restored device would report a brand-new install.
+    ///
+    /// Reapplied on every successful save rather than once: `.atomic` writes to
+    /// a temp file and renames it into place, so each save replaces the inode
+    /// the attribute was set on. Cheap — it is a single `setattrlist` against a
+    /// file we have just written and whose metadata is already hot.
+    private func excludeFromBackup() {
+        var url = fileURL
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        do {
+            try url.setResourceValues(values)
+        } catch {
+            logger.debug("could not exclude the queue file from backups: \(error)")
         }
     }
 }
