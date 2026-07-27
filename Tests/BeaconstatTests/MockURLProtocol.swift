@@ -3,9 +3,17 @@ import Foundation
 /// URLProtocol mock: captures requests + bodies, returns stubbed responses.
 /// URLSession moves `httpBody` into `httpBodyStream`, so we drain the stream.
 final class MockURLProtocol: URLProtocol {
-    struct Stub { let statusCode: Int; let data: Data; let error: Error?
-        init(statusCode: Int, data: Data = Data(), error: Error? = nil) {
+    struct Stub {
+        let statusCode: Int
+        let data: Data
+        let error: Error?
+        /// Response headers. Needed to exercise `Retry-After` (M9); the mock
+        /// used to hard-code `headerFields: nil`.
+        let headers: [String: String]?
+        init(statusCode: Int, data: Data = Data(), error: Error? = nil,
+             headers: [String: String]? = nil) {
             self.statusCode = statusCode; self.data = data; self.error = error
+            self.headers = headers
         }
     }
 
@@ -69,7 +77,7 @@ final class MockURLProtocol: URLProtocol {
             client?.urlProtocol(self, didFailWithError: error)
         } else {
             let response = HTTPURLResponse(url: request.url!, statusCode: stub.statusCode,
-                                           httpVersion: "HTTP/1.1", headerFields: nil)!
+                                           httpVersion: "HTTP/1.1", headerFields: stub.headers)!
             client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
             client?.urlProtocol(self, didLoad: stub.data)
         }

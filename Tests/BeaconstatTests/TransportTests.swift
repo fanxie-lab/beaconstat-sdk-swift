@@ -61,7 +61,7 @@ final class TransportTests: XCTestCase {
 
     func testStatusMapping() {
         for (code, expected) in [(401, TransportError.unauthorized), (400, .badRequest),
-                                 (429, .rateLimited), (503, .server)] {
+                                 (429, .rateLimited(retryAfter: nil)), (503, .server(retryAfter: nil))] {
             MockURLProtocol.reset()
             MockURLProtocol.handler = { _ in .init(statusCode: code) }
             let exp = expectation(description: "s\(code)")

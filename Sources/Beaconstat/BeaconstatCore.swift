@@ -698,7 +698,7 @@ extension BeaconstatCore {
         case .failure(let error):
             logger.debug("flush failed (\(error)) — requeueing for retry")
             queue_?.release()
-            scheduleRetry()
+            scheduleRetry(retryAfter: error.retryAfter)
         }
     }
 
@@ -731,13 +731,39 @@ extension BeaconstatCore {
         scheduleRetry()
     }
 
-    private func scheduleRetry() {
-        guard let maxRetries = configuration?.options.maxRetries else { return }
+    /// - Parameter retryAfter: the server's own instruction, parsed from the
+    ///   `Retry-After` header. Honoured over the local schedule.
+    private func scheduleRetry(retryAfter: TimeInterval? = nil) {
+        guard let options = configuration?.options else { return }
         retryCount += 1
-        guard let delay = RetryPolicy.delay(forAttempt: retryCount, maxRetries: maxRetries) else {
-            retryCount = 0 // give up this round; periodic timer / next event / reconnect will retry
+        guard let delay = RetryPolicy.delay(forAttempt: retryCount, maxRetries: options.maxRetries,
+                                            retryAfter: retryAfter) else {
+            retryCount = 0
+            scheduleNextRound(flushInterval: options.flushInterval, maxRetries: options.maxRetries)
             return
         }
+        scheduleRetryTimer(after: delay)
+    }
+
+    /// The attempt budget for this round is spent.
+    ///
+    /// This used to just reset `retryCount` and leave a comment saying the
+    /// periodic timer would retry — but in Release `flushInterval` is 14,400 s,
+    /// so a queue could sit for four hours after fourteen seconds of trying
+    /// while the cap evicted underneath it (M9). Start a fresh round in minutes
+    /// instead, jittered so a whole fleet doesn't come back together, and never
+    /// later than the host's own flush interval.
+    private func scheduleNextRound(flushInterval: TimeInterval, maxRetries: Int) {
+        // `maxRetries: 0` is documented as "no retry timer" — respect it and
+        // leave the work to the periodic flush, the next event, and reconnect.
+        guard maxRetries > 0, let queue_ = queue_, !queue_.isEmpty else { return }
+        let delay = RetryPolicy.exhaustedRoundDelay(cappedBy: flushInterval)
+        logger.debug("retries exhausted with \(queue_.count) event(s) queued — trying again in "
+                     + "\(Int(delay))s rather than waiting for the periodic flush")
+        scheduleRetryTimer(after: delay)
+    }
+
+    private func scheduleRetryTimer(after delay: TimeInterval) {
         retryTimer?.cancel()
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now() + delay)

@@ -59,7 +59,7 @@ final class HeadOfLineBlockingTests: XCTestCase {
     /// The two 4xx that genuinely mean "try again".
     func testRetryable4xxKeepsItsOwnClassification() {
         XCTAssertEqual(error(408), .network, "408 Request Timeout is retryable")
-        XCTAssertEqual(error(429), .rateLimited)
+        XCTAssertEqual(error(429), .rateLimited(retryAfter: nil))
         XCTAssertEqual(error(401), .unauthorized)
         XCTAssertEqual(error(400), .badRequest)
     }
@@ -72,7 +72,7 @@ final class HeadOfLineBlockingTests: XCTestCase {
 
     func testServerErrorsStayRetryable() {
         for status in [500, 502, 503, 504] {
-            XCTAssertEqual(error(status), .server)
+            XCTAssertEqual(error(status), .server(retryAfter: nil))
         }
     }
 
@@ -116,13 +116,9 @@ final class HeadOfLineBlockingTests: XCTestCase {
     /// 413 with more than one event in the batch: shrink and retry rather than
     /// dropping real data.
     func testPayloadTooLargeShrinksTheBatchInsteadOfDroppingIt() {
-        let lock = NSLock()
-        var eventBatchSizes: [Int] = []
         MockURLProtocol.handler = { req in
-            if req.url!.path.hasSuffix("/handshake") {
-                return .init(statusCode: 200, data: self.handshakeBody)
-            }
-            return .init(statusCode: 413)
+            req.url!.path.hasSuffix("/handshake") ? .init(statusCode: 200, data: self.handshakeBody)
+                                                  : .init(statusCode: 413)
         }
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("q-\(UUID()).json")
         defer { try? FileManager.default.removeItem(at: file) }
@@ -144,8 +140,6 @@ final class HeadOfLineBlockingTests: XCTestCase {
         XCTAssertFalse(FileEventStore(fileURL: file).load().isEmpty,
                        "a multi-event 413 must not discard the events")
 
-        lock.lock(); eventBatchSizes = []; lock.unlock()
-        _ = eventBatchSizes
         core.shutdown()
     }
 
