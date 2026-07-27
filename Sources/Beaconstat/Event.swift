@@ -107,3 +107,7 @@ enum IdempotencyKey {
         Signer.sha256Hex(Data(events.map(\.id).joined(separator: "\n").utf8))
     }
 }
+
+/// How a batch becomes wire bytes. A type alias rather than a bare closure so
+/// the `includeEventIds` argument is named at the injection site.
+typealias BatchEncoder = (_ batch: EventBatch, _ includeEventIds: Bool) throws -> Data

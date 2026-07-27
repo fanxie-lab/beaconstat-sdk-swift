@@ -41,6 +41,10 @@ final class BeaconstatCore {
     private let lifecycleObserver: LifecycleObserver
     private var lifecycleStarted = false
     private var reportedStoreDegradation = false
+    /// How a batch becomes wire bytes. Injectable purely so the encode-failure
+    /// path is reachable in a test (L2) — production always uses
+    /// `PayloadEncoder.encode`.
+    private let payloadEncoder: BatchEncoder
     /// Holds off suspension while a background flush is in flight (H2).
     /// Internally synchronised, because the assertion is taken on the
     /// notification thread; the `holdingBackgroundActivity` flag tracking it is
@@ -70,8 +74,12 @@ final class BeaconstatCore {
          },
          lifecycleObserver: LifecycleObserver = LifecycleObserver(),
          backgroundActivity: BackgroundActivity = BackgroundActivityFactory.make(),
+         payloadEncoder: @escaping BatchEncoder = { batch, includeEventIds in
+             try PayloadEncoder.encode(batch, includeEventIds: includeEventIds)
+         },
          logSink: ((String) -> Void)? = nil) {
         self.backgroundActivity = backgroundActivity
+        self.payloadEncoder = payloadEncoder
         self.store = store
         self.clock = clock
         self.sessionProvider = sessionProvider
@@ -632,8 +640,10 @@ extension BeaconstatCore {
         guard !batch.isEmpty else { return }
         let body = EventBatch(productVersion: config.options.productVersionOrDefault,
                               environment: environment, events: batch)
-        guard let bodyData = try? PayloadEncoder.encode(
-            body, includeEventIds: config.options.sendEventIds) else {
+        guard let bodyData = try? payloadEncoder(body, config.options.sendEventIds) else {
+            // Nothing has been checked out yet, so the batch is untouched and
+            // fully on disk. The old order dequeued first and returned here,
+            // silently destroying the batch it had just removed (L2).
             logger.debug("could not encode a batch of \(batch.count) event(s) — leaving it queued")
             return
         }
