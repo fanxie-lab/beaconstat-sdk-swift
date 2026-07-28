@@ -68,8 +68,22 @@ public struct BeaconstatOptions: Sendable {
     /// colour, preferred content size. None is prohibited and the SDK collects
     /// no IDFA/IDFV, but alongside `device.model`, the screen metrics,
     /// `timezone`, `locale` and the OS version they sharpen the fingerprint
-    /// materially, and collecting them puts a disclosure obligation in your
-    /// app's privacy manifest.
+    /// materially.
+    ///
+    /// ## This is the one thing the SDK's own privacy manifest cannot cover
+    ///
+    /// `Sources/Beaconstat/PrivacyInfo.xcprivacy` declares everything the SDK
+    /// collects in its default configuration, so adopters normally add nothing.
+    /// Not this: Apple's `NSPrivacyCollectedDataTypeSensitiveInfo` enumerates
+    /// "disability", a static manifest cannot say "only when configured", and
+    /// declaring it unconditionally would stamp Sensitive Info on the privacy
+    /// report of every adopter — including the great majority who leave this
+    /// off.
+    ///
+    /// So setting this to `true` means adding
+    /// `NSPrivacyCollectedDataTypeSensitiveInfo` (unlinked, untracked, purpose
+    /// Analytics) to **your** app's `PrivacyInfo.xcprivacy` and matching it in
+    /// App Store Connect. The README's "Privacy manifest" section has the XML.
     ///
     /// Turn it on deliberately, when you are actually going to act on the data
     /// (for example sizing an accessibility work programme) and your privacy

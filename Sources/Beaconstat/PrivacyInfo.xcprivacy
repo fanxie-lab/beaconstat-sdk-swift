@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Beaconstat Swift SDK — privacy manifest.
+
+  Bundled via `resources: [.copy("PrivacyInfo.xcprivacy")]` in Package.swift, so
+  it lands at the ROOT of the SwiftPM resource bundle, which is where Xcode's
+  privacy-report aggregation looks. `.copy` rather than `.process`: `.process`
+  is free to rewrite or relocate what it touches, and a manifest that moves out
+  of the bundle root is a manifest that is not read.
+
+  Keep this file, `PrivacyManifestTests.swift` and README's "Privacy" section in
+  step. The tests assert this file's exact contents and that the required-reason
+  audit below still matches the source.
+-->
+<plist version="1.0">
+<dict>
+	<!--
+	  No tracking, as ATT defines it: linking this app's data with third-party
+	  data for advertising, or sharing it with a data broker.
+
+	  The SDK carries no IDFA, never touches `identifierForVendor`, links no ad
+	  framework, and posts to exactly one host — the deployment the adopter
+	  configured. The install identifier is structurally incapable of cross-app
+	  linkage: it is a locally generated UUID that leaves the device only as
+	  SHA256("<bundleId>|<installId>"), so the same device reports a DIFFERENT
+	  value to every app that embeds the SDK.
+
+	  This is deliberately not "false to be safe" — `true` would oblige every
+	  adopter to run an App Tracking Transparency prompt they do not need, and
+	  would make requests to any listed domain fail without one.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<!-- Must stay empty while NSPrivacyTracking is false. -->
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<!--
+	  Every type below is Linked=false and Tracking=false, for one reason that
+	  applies to all of them: there is no identity in this system to link to.
+	  The SDK exposes no `identify()`, collects no account, name, email or
+	  device-provided identifier, and the only stable id is a random UUID minted
+	  on device, hashed with the bundle id before transmission, and never joined
+	  to anything else. That is Apple's de-identification bar — direct
+	  identifiers are never collected in the first place, and the linkage is
+	  broken before collection rather than after.
+	-->
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array>
+		<!--
+		  The install fingerprint SHA256("<bundleId>|<installId>") sent in the
+		  handshake, and the per-session `_bcs.session.id` property. Declared as
+		  Device ID because Apple's definition covers "other device-level ID",
+		  and an install id that survives reinstall via the Keychain is one.
+		-->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeDeviceID</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+		<!--
+		  Event names and their string properties, plus the SDK's own lifecycle
+		  and entry-point events: session start, install detected, app updated,
+		  app backgrounded, opened-from-url/shortcut/widget, push received and
+		  opened. URL entry points record scheme and host only; push events
+		  record category, action id and a was-silent flag only.
+		-->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeProductInteraction</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+		<!--
+		  The technical half of the `environment` map: device.model,
+		  device.platform, device.os_name/os_version/system_major_version,
+		  device.architecture, device.screen_* and device.orientation,
+		  app.version, app.build, sdk.name, sdk.version and the run_context.*
+		  flags (debug / simulator / testflight / app_store / target
+		  environment).
+		-->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherDiagnosticData</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+		<!--
+		  Device preferences with no category of their own in Apple's taxonomy:
+		  locale, timezone, user_preference.language, user_preference.region,
+		  user_preference.layout_direction and user_preference.color_scheme.
+
+		  Timezone is deliberately NOT declared as Coarse Location. Apple scopes
+		  that type to resolutions comparable to Approximate Location Services;
+		  an IANA timezone is orders of magnitude coarser and is not derived
+		  from Location Services. Declaring it would put a location pin on every
+		  adopter's nutrition label for data that is not location.
+		-->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypeOtherDataTypes</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+			</array>
+		</dict>
+		<!--
+		  NOT DECLARED: NSPrivacyCollectedDataTypeSensitiveInfo.
+
+		  `BeaconstatOptions.collectAccessibility` is off by default, so the
+		  shipped configuration collects none of the seven accessibility
+		  settings. Apple's Sensitive Info type enumerates "disability", and
+		  those settings are disability proxies — so an adopter who sets the
+		  flag to `true` MUST add Sensitive Info (Linked=false, Tracking=false,
+		  purpose Analytics) to their OWN app's PrivacyInfo.xcprivacy and to
+		  their App Store Connect answers. README and MIGRATION.md §3 say so.
+
+		  Declaring it here instead would stamp "collects Sensitive Info" on
+		  every adopter's privacy report for a feature almost none of them turn
+		  on — an inaccuracy in the direction that costs them, not us. A static
+		  manifest cannot express "only when configured", and of the two
+		  possible inaccuracies this is the one the adopter can see coming: it
+		  is gated behind a flag they had to set, whose documentation states the
+		  obligation at the point of the decision.
+		-->
+	</array>
+	<!--
+	  Empty, and audited rather than assumed.
+
+	  Required-reason declarations are scoped to iOS, iPadOS, tvOS, visionOS and
+	  watchOS — Apple's article says exactly that, and macOS is absent from the
+	  list. The SDK's entire source references ONE required-reason API:
+
+	      EnvironmentCollector.colorScheme()
+	          UserDefaults.standard.string(forKey: "AppleInterfaceStyle")
+
+	  and it sits inside `#elseif os(macOS)`, so it is not compiled into any
+	  platform where a declaration is required. Nothing else in the source
+	  touches a covered API: no file-timestamp read (the queue file's only
+	  metadata write is `isExcludedFromBackup`, which is not in the category),
+	  no `systemUptime` or `mach_absolute_time`, no `statfs`/volume-capacity
+	  key, no `activeInputModes`. `sysctlbyname` is used for `hw.machine` /
+	  `hw.model` only, which is not a covered API.
+
+	  Note what is NOT being claimed: none of the four UserDefaults reason codes
+	  would fit that read even on a platform where it applied. `AppleInterfaceStyle`
+	  is written by the SYSTEM in NSGlobalDomain and the derived value is sent
+	  off device as `user_preference.color_scheme`, which CA92.1 and 1C8F.1 both
+	  exclude ("does not permit reading information that was written by other
+	  apps or the system"), C56D.1 forbids sending off device, and AC6B.1 is for
+	  MDM keys. So the read must stay macOS-gated. `PrivacyManifestTests`
+	  enforces that: move it out from behind `os(macOS)` and a test fails.
+	-->
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array/>
+</dict>
+</plist>

@@ -166,11 +166,80 @@ only ever leaves the device as `SHA256(bundleId|installId)`.
   characters, or contains anything outside `A–Z a–z 0–9 . _ -`.
 - **`collectAccessibility` is off by default.** Turning it on collects seven
   disability-adjacent settings; alongside device model, screen metrics, timezone
-  and locale they sharpen the fingerprint, and collecting them puts a disclosure
-  obligation in *your* privacy manifest.
+  and locale they sharpen the fingerprint, and it adds a declaration you must
+  make in *your* privacy manifest — see below.
 
 Consent is developer-managed — gate `configure()` behind your own consent UI, or
 use `optOut()`.
+
+### Privacy manifest
+
+The SDK ships its own `PrivacyInfo.xcprivacy`, bundled as an SPM resource, so it
+appears in the privacy report Xcode generates for your app (Product → Archive →
+Generate Privacy Report). You do not need to re-declare anything below in your
+own manifest — Apple aggregates the app's manifest with those of the SDKs it
+links.
+
+**No tracking.** `NSPrivacyTracking` is `false` and no tracking domains are
+listed. The SDK carries no IDFA, never reads `identifierForVendor`, links no
+advertising framework, and posts to one host — yours. The install identifier is
+structurally incapable of cross-app linkage: it leaves the device only as
+`SHA256(bundleId|installId)`, so one device presents a *different* value to
+every app that embeds the SDK. Nothing here obliges you to run an App Tracking
+Transparency prompt.
+
+**Collected data types**, all declared unlinked, untracked and for analytics:
+
+| Declared type | What it covers |
+|---|---|
+| `DeviceID` | The install fingerprint and the per-session `_bcs.session.id` |
+| `ProductInteraction` | Event names and properties; session, install, update, background and entry-point events |
+| `OtherDiagnosticData` | `device.*`, `app.version`/`app.build`, `sdk.*`, `run_context.*` |
+| `OtherDataTypes` | `locale`, `timezone`, `user_preference.*` |
+
+Unlinked is the honest answer, not a convenient one: the SDK exposes no
+`identify()`, collects no account, name or email, and the only stable id is a
+random UUID minted on device and hashed before transmission — Apple's
+de-identification bar is met before collection, not after. Timezone is
+deliberately *not* declared as Coarse Location; an IANA timezone is far coarser
+than Approximate Location Services and is not derived from it.
+
+**No required-reason APIs are declared, and that is an audit result.** Apple
+scopes required-reason declarations to iOS, iPadOS, tvOS, visionOS and watchOS.
+The SDK's whole source touches exactly one covered API — `UserDefaults.standard`
+reading `AppleInterfaceStyle` for `user_preference.color_scheme` — and it sits
+behind `#elseif os(macOS)`, so it is not compiled into any platform that
+requires a declaration. Nothing else qualifies: no file-timestamp read, no
+`systemUptime`, no disk-space or active-keyboard API; `sysctlbyname` is used for
+`hw.machine`/`hw.model`, which is not covered. `PrivacyManifestTests` re-derives
+this from the source on every run, so the empty array cannot go stale.
+
+**If you set `collectAccessibility = true`**, add this to your *own* app's
+`PrivacyInfo.xcprivacy` — the SDK cannot declare it for you, because a static
+manifest cannot say "only when configured", and declaring it unconditionally
+would stamp "collects Sensitive Info" on every adopter:
+
+```xml
+<dict>
+    <key>NSPrivacyCollectedDataType</key>
+    <string>NSPrivacyCollectedDataTypeSensitiveInfo</string>
+    <key>NSPrivacyCollectedDataTypeLinked</key>
+    <false/>
+    <key>NSPrivacyCollectedDataTypeTracking</key>
+    <false/>
+    <key>NSPrivacyCollectedDataTypePurposes</key>
+    <array>
+        <string>NSPrivacyCollectedDataTypePurposeAnalytics</string>
+    </array>
+</dict>
+```
+
+Apple's Sensitive Info type enumerates "disability", and the seven settings —
+bold text, reduce motion, reduce transparency, invert colours, increased
+contrast, differentiate without colour, preferred content size — are disability
+proxies. Answer App Store Connect's privacy questions to match. If that
+declaration is more than you want to make, leave the flag off; that is why it
+defaults to off.
 
 ## Environment freshness
 

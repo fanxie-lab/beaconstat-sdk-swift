@@ -117,9 +117,19 @@ Turning it on collects seven disability-adjacent settings (bold text, reduce
 motion, reduce transparency, invert colours, increased contrast, differentiate
 without colour, preferred content size). They are not prohibited and the SDK
 collects no IDFA/IDFV, but combined with device model, screen metrics, timezone,
-locale and OS version they sharpen the fingerprint materially — and collecting
-them puts a disclosure obligation in **your** privacy manifest. Turn it on when
+locale and OS version they sharpen the fingerprint materially. Turn it on when
 you are actually going to act on the data.
+
+**If you turn it on, you take on a privacy-manifest declaration.** The SDK now
+ships its own `PrivacyInfo.xcprivacy` covering everything it collects in the
+default configuration, so in the ordinary case there is nothing for you to add.
+The accessibility keys are the one exception: a static manifest cannot express
+"only when configured", and declaring Sensitive Info unconditionally would put
+it on the privacy report of every adopter, including the ones who left the flag
+alone. So when you set it to `true`, add
+`NSPrivacyCollectedDataTypeSensitiveInfo` (unlinked, untracked, purpose
+Analytics) to your app's own manifest and match it in App Store Connect. The
+exact XML is in the README's "Privacy manifest" section.
 
 **Data impact:** if you leave it off, `accessibility.*` stops arriving. Any
 dashboard segment built on those keys goes empty for 1.1.0 installs.

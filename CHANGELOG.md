@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+`BeaconstatVersion.current` is still `1.1.0` — nothing here changes the wire
+format or the public API, and the constant moves when a release is cut.
+
+### Added
+
+- **A privacy manifest.** `Sources/Beaconstat/PrivacyInfo.xcprivacy`, bundled
+  via `resources: [.copy(...)]` so it reaches the resource-bundle root and shows
+  up in the privacy report Xcode generates for an adopter's app. The SDK asked
+  adopters to declare things while declaring nothing itself; it no longer does.
+
+  - `NSPrivacyTracking` is `false` with no tracking domains. No IDFA, no
+    `identifierForVendor`, no ad framework, and an install id hashed with the
+    bundle id, so one device cannot be joined across two apps that embed the
+    SDK. Adopters take on no App Tracking Transparency obligation.
+  - Four collected data types, all unlinked, untracked and for analytics:
+    `DeviceID`, `ProductInteraction`, `OtherDiagnosticData`, `OtherDataTypes`.
+  - `NSPrivacyAccessedAPITypes` is **empty, as an audit result**. Required-reason
+    declarations apply to iOS, iPadOS, tvOS, visionOS and watchOS; the SDK's only
+    covered API is the `UserDefaults` read of `AppleInterfaceStyle`, which lives
+    behind `#elseif os(macOS)` and is compiled into none of them. It also could
+    not be declared if it were: it reads a system-written value and sends the
+    result off device, which every one of Apple's four UserDefaults reason codes
+    excludes.
+  - `PrivacyManifestTests` re-derives that audit from the source on every run
+    and fails, by file and line, if a required-reason API appears outside a
+    macOS-only branch — so the empty array cannot quietly go stale.
+  - **Adopters who set `collectAccessibility = true` must declare
+    `NSPrivacyCollectedDataTypeSensitiveInfo` in their own manifest.** See
+    README → "Privacy manifest". The SDK cannot do it for them: the flag
+    defaults to off, and an unconditional declaration would put Sensitive Info
+    on every adopter's privacy report.
+
 ## 1.1.0
 
 > ## ⚠️ THIS RELEASE CONTAINS BREAKING CHANGES
