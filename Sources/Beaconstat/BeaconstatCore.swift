@@ -754,8 +754,14 @@ extension BeaconstatCore {
 
     /// 413 is neither poison nor plainly retryable: the same events in a
     /// smaller batch may well be accepted, so shrink and try again rather than
-    /// throwing real data away. Converges on whatever body limit the deployment
-    /// actually has — the reference API sits behind Express's 100 KB default.
+    /// throwing real data away.
+    ///
+    /// This converges on whatever body limit the deployment actually has, which
+    /// is the point: the reference API now pins its own JSON limit at 256 KB
+    /// (`JSON_BODY_LIMIT_BYTES`), but `endpoint` is host-overridable and the
+    /// thing that answers 413 may be a reverse proxy, an API gateway or a
+    /// self-hosted build that inherited body-parser's 100 KB default. The SDK
+    /// does not get to know which, so it discovers it.
     private func handlePayloadTooLarge(batchCount: Int) {
         // Two ways out, and between them they GUARANTEE termination: the budget
         // strictly halves toward a floor, and once it can shrink no further —

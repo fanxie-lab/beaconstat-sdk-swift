@@ -26,13 +26,43 @@ final class EventQueue {
 
     /// Default ceiling on the encoded size of one batch (H3).
     ///
-    /// 100 events with no byte budget at all could approach ~5 MB at the
-    /// enforced property limits, and the reference ingest API runs behind
-    /// Express's default 100 KB body-parser limit — so a full batch of large
-    /// events was 413'd every single time, forever, with nothing behind it able
-    /// to send. 80 KB leaves headroom for `environment` and `productVersion`,
-    /// which share the same body; the core subtracts the environment's actual
-    /// size from this before selecting.
+    /// Originally there was no byte budget at all: 100 events could approach
+    /// ~5 MB at the enforced property limits, so a full batch of large events
+    /// was 413'd every single time, forever, with nothing behind it able to
+    /// send. The core subtracts the encoded `environment` size from this before
+    /// selecting, because `environment` and `productVersion` ride in the same
+    /// request body.
+    ///
+    /// ## Why it is still 80 KB
+    ///
+    /// The figure was originally sized against Express's 100 KB body-parser
+    /// default, which the reference ingest API was silently inheriting. It no
+    /// longer is — `apps/api` now pins `JSON_BODY_LIMIT_BYTES` at 256 KB
+    /// explicitly. Re-derived against that ceiling, 80 KB is still right, for
+    /// reasons that have nothing to do with the old number:
+    ///
+    /// * **The byte budget is not what limits a batch in practice.** The server
+    ///   caps a batch at 100 events, so bytes only bind when events average
+    ///   more than ~810 bytes. A typical event is ~140 bytes on the wire and a
+    ///   property-heavy one ~650, which puts a full 100-event batch at 14 KB
+    ///   and 66 KB respectively — both under this budget, both already limited
+    ///   by `maxEventsPerBatch`. Raising the budget would not let a single
+    ///   additional event through for any realistic traffic.
+    /// * **It has to clear `maxEventBytes`, and does, comfortably.** A maximal
+    ///   *legal* event — the server's 50 property keys at 1024 chars — encodes
+    ///   to ~52 KB. 80 KB admits it with room; 256 KB admits nothing more,
+    ///   because a second such event would be refused by this budget either way.
+    /// * **256 KB is a margin, not an allowance.** The API pinned it precisely
+    ///   so the two constants stop being coincidentally coupled across two
+    ///   repositories, and its own test asserts the limit is at least twice
+    ///   this value. Spending the margin rebuilds the coupling it bought.
+    /// * **`endpoint` is host-overridable.** Staying under the ubiquitous
+    ///   100 KB body-parser default means a self-hosted or proxied deployment
+    ///   works on the first batch instead of converging through the 413 shrink
+    ///   path.
+    ///
+    /// Worst case on the wire today is therefore ~82 KB: this budget, plus the
+    /// ~0.7 KB environment map, plus envelope.
     static let defaultMaxBatchBytes = 80 * 1024
 
     /// Never shrink the adaptive budget below this, or a server answering 413

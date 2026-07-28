@@ -34,6 +34,31 @@ format or the public API, and the constant moves when a release is cut.
     defaults to off, and an unconditional declaration would put Sensitive Info
     on every adopter's privacy report.
 
+### Changed
+
+- **The batch byte budget stays at 80 KB**, now for a stated reason instead of a
+  stale one. The comments claimed it was sized against "Express's 100 KB
+  default"; `apps/api` has since pinned its JSON body limit at 256 KB
+  explicitly, so the figure was re-derived against the real ceiling and left
+  where it is. Bytes are not what limits a batch in practice — the server's
+  100-event cap is, until events average over ~810 bytes, and a typical event is
+  ~140. The budget's actual job is to clear the fixed 64 KB single-event ceiling,
+  which it does with 28 KB to spare; raising it admits no event that is refused
+  today. 256 KB is also a margin the API bought deliberately (its own test
+  asserts the limit is at least twice the SDK's ceiling), and `endpoint` is
+  host-overridable, so staying under body-parser's ubiquitous 100 KB default is
+  what makes a self-hosted deployment work on the first batch rather than
+  converging through the 413 shrink path.
+
+  No behaviour change. `BudgetRationaleTests` turns each of those four claims
+  into an assertion, so the next person to notice the headroom finds the
+  derivation rather than only the number.
+
+- The 413 handler's comment no longer claims the reference API sits behind
+  Express's default. It says what is actually true and why the adaptive shrink
+  still matters: `endpoint` is host-overridable, and the thing answering 413 may
+  be a proxy, a gateway or a self-hosted build the SDK cannot interrogate.
+
 ## 1.1.0
 
 > ## ⚠️ THIS RELEASE CONTAINS BREAKING CHANGES
