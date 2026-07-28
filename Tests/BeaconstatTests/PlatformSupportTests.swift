@@ -78,6 +78,13 @@ final class PlatformSupportTests: XCTestCase {
                                              collectAccessibility: false)
         let value = collector.collectDeferrable()["run_context.target_environment"]
         XCTAssertNotNil(value)
-        XCTAssertTrue(["native", "catalyst", "ios_on_mac"].contains(value ?? ""), "\(value ?? "nil")")
+        // Every token `EnvironmentCollector.targetEnvironment()` can return.
+        // The old list had two bugs that only a non-macOS destination could
+        // expose: it omitted `simulator` entirely, and spelled Catalyst
+        // `catalyst` where the collector emits `mac_catalyst` — so the guard on
+        // a reserved dashboard dimension would have failed on the very builds
+        // it exists to protect.
+        XCTAssertTrue(["native", "mac_catalyst", "simulator", "ios_on_mac"].contains(value ?? ""),
+                      "\(value ?? "nil")")
     }
 }

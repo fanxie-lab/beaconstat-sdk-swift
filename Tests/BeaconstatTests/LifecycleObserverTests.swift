@@ -1,4 +1,13 @@
 import XCTest
+// `UIKit` and `AppKit` arrive transitively through `XCTest`, so the iOS and
+// macOS branches below compiled without an explicit import. `WatchKit` does
+// not, so `testWatchKitMapsEnterBackgroundAndEnterForeground` never built —
+// the whole test target failed to compile for watchOS, which is why CI's
+// watchOS `Test on a simulator` leg could not have been passing and L9's
+// "watchOS now emits lifecycle events" was verified only by reading the source.
+#if os(watchOS)
+import WatchKit
+#endif
 @testable import Beaconstat
 
 /// M3 — macOS mapped `app_backgrounded` onto `NSApplication.didResignActive`,
