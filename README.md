@@ -72,6 +72,9 @@ Only `configure` is main-actor-bound. Everything else is callable from any
 thread or actor — deliberately, so a `UNNotificationServiceExtension` can report
 `pushReceived` from a synchronous delegate callback.
 
+Curious what happens after `track()` returns? [ARCHITECTURE.md](ARCHITECTURE.md)
+walks the data flow, storage and flush triggers in a page.
+
 ## Options
 
 ```swift
