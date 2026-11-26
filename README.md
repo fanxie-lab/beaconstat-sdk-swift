@@ -20,7 +20,7 @@ Or in `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/fanxie-lab/beaconstat-sdk-swift", from: "1.1.0")
+    .package(url: "https://github.com/fanxie-lab/beaconstat-sdk-swift", from: "1.2.0")
 ]
 ```
 
@@ -93,7 +93,7 @@ Beaconstat.configure(publicKey: "bcs_pub_…", hmacSecret: "…", options: optio
 | `maxQueuedEvents` | `500` | `1 … 10_000` |
 | `maxRetries` | `3` | `0 … 10` (`0` disables the backoff timer) |
 | `testMode` | `.automatic` | `.automatic` / `.forceProduction` / `.forceTest` |
-| `routeTestFlightToTest` | `false` | — |
+| `routeTestFlightToTest` | `true` | — (set `false` to count TestFlight as production) |
 | `debugLogging` | `false` | — |
 | `collectAccessibility` | `false` | — |
 | `endpoint` | production | must be `https` unless `allowInsecureEndpoint` |
@@ -287,7 +287,10 @@ screen, it has volumes and windows the user resizes in space.
 ## Test mode
 
 Under `DEBUG` or the simulator, events route to a separate test pipeline
-automatically. See `BeaconstatOptions.testMode` / `routeTestFlightToTest`.
+automatically. Since 1.2.0 so do TestFlight builds, which the handshake reports
+as the `testflight` environment; set `options.routeTestFlightToTest = false` to
+count beta testers as production. See `BeaconstatOptions.testMode` /
+`routeTestFlightToTest`.
 
 ## Debugging
 

@@ -82,7 +82,8 @@ final class TransportTests: XCTestCase {
         // automatic: DEBUG or simulator route to test.
         XCTAssertTrue(TestModeResolver.routesToTest(.automatic, isDebug: true, isSimulator: false, isTestFlight: false, routeTestFlightToTest: false))
         XCTAssertFalse(TestModeResolver.routesToTest(.automatic, isDebug: false, isSimulator: false, isTestFlight: false, routeTestFlightToTest: false))
-        // automatic + TestFlight: only routes to test when opted in.
+        // automatic + TestFlight: routes to test unless the developer opted out
+        // (the option defaults to true since 1.2.0).
         XCTAssertFalse(TestModeResolver.routesToTest(.automatic, isDebug: false, isSimulator: false, isTestFlight: true, routeTestFlightToTest: false))
         XCTAssertTrue(TestModeResolver.routesToTest(.automatic, isDebug: false, isSimulator: false, isTestFlight: true, routeTestFlightToTest: true))
     }

@@ -13,6 +13,8 @@ final class BeaconstatOptionsTests: XCTestCase {
         XCTAssertFalse(o.debugLogging)
         XCTAssertNil(o.endpoint)
         XCTAssertEqual(o.testMode, .automatic)
+        // 1.2.0: TestFlight is test data unless the developer opts out.
+        XCTAssertTrue(o.routeTestFlightToTest)
     }
 
     /// The default cadence is build-configuration dependent, and until

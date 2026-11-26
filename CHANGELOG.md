@@ -1,9 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
 
-`BeaconstatVersion.current` is still `1.1.0` — nothing here changes the wire
-format or the public API, and the constant moves when a release is cut.
+`BeaconstatVersion.current` is `1.2.0`.
 
 ### Added
 
@@ -36,6 +35,17 @@ format or the public API, and the constant moves when a release is cut.
 
 ### Changed
 
+- **TestFlight builds now go to test data by default.**
+  `BeaconstatOptions.routeTestFlightToTest` defaults to `true` (it was `false`),
+  so under `.automatic` test mode a TestFlight build routes to the test pipeline
+  and beta-tester activity stays out of production analytics. **To keep counting
+  beta testers as production, set `options.routeTestFlightToTest = false`.**
+  `testMode = .forceProduction` / `.forceTest` are unaffected.
+- **The handshake reports the environment the SDK actually resolved.**
+  `environmentType` is now `development`, `testflight` or `production` (it was
+  only ever `development` or `production`, so TestFlight was indistinguishable
+  from a simulator run). Servers that understand SDK >= 1.2.0 route by this
+  value; older SDKs keep being classified from the `run_context` flags.
 - **The batch byte budget stays at 80 KB**, now for a stated reason instead of a
   stale one. The comments claimed it was sized against "Express's 100 KB
   default"; `apps/api` has since pinned its JSON body limit at 256 KB

@@ -131,9 +131,10 @@ public struct BeaconstatOptions: Sendable {
     /// The host app's version, sent on the wire as `productVersion`. The
     /// facade fills this from `CFBundleShortVersionString` when left `nil`.
     public var productVersion: String?
-    /// Under `.automatic` test mode, also route TestFlight builds to the test
-    /// endpoint. Defaults to `false` — TestFlight is a pre-release channel
-    /// closer to production; opt in if you want beta data segregated.
+    /// Under `.automatic` test mode, route TestFlight builds to the test
+    /// endpoint, so beta-tester activity is reported as `testflight` test data
+    /// and kept out of production analytics. Defaults to `true` (since 1.2.0;
+    /// it was `false` before). Set `false` to count beta testers as production.
     public var routeTestFlightToTest: Bool
     /// Put each event's stable idempotency `id` in the request body (H6).
     ///
@@ -163,7 +164,7 @@ public struct BeaconstatOptions: Sendable {
         endpoint: URL? = nil,
         keychainAccessGroup: String? = nil,
         productVersion: String? = nil,
-        routeTestFlightToTest: Bool = false,
+        routeTestFlightToTest: Bool = true,
         sendEventIds: Bool = false,
         allowInsecureEndpoint: Bool = false
     ) {

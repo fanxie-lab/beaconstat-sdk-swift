@@ -102,4 +102,62 @@ final class BeaconstatCoreHandshakeTests: XCTestCase {
         XCTAssertTrue(MockURLProtocol.capturedRequests.isEmpty) // never hit the network
         core.shutdown()
     }
+
+    // MARK: handshake `environmentType`
+
+    /// Runs one configure and returns the `environmentType` the handshake body
+    /// carried. The server routes by this value, so it has to be the resolved
+    /// environment, not a two-way guess.
+    private func handshakeEnvironmentType(options: BeaconstatOptions,
+                                          environment: [String: String]) throws -> String {
+        MockURLProtocol.handler = { req in
+            req.url!.path.hasSuffix("/handshake")
+                ? .init(statusCode: 200, data: Data(#"{"siteToken":"bcs_tok_z","serverTime":"2026-04-19T10:30:00.000Z"}"#.utf8))
+                : .init(statusCode: 202)
+        }
+        let file = tempQueue(); defer { try? FileManager.default.removeItem(at: file) }
+        let core = makeCore(store: InMemorySecureStore(), file: file)
+        let done = expectation(description: "flow")
+        core.configure(publicKey: "bcs_pub_abcdef0123456789", hmacSecret: validHmac,
+                       options: options, environment: environment)
+        core.onQuiescent { done.fulfill() }
+        wait(for: [done], timeout: 3)
+        core.shutdown()
+        let body = try XCTUnwrap(MockURLProtocol.bodies(forPathSuffix: "/handshake").first)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(body.utf8)) as? [String: Any])
+        return try XCTUnwrap(json["environmentType"] as? String)
+    }
+
+    private var isDebugOrSimulator: Bool { BeaconstatCore.isDebugBuild || BeaconstatCore.isSimulator }
+
+    /// A TestFlight run reports `testflight`. (A Debug/simulator build outranks
+    /// TestFlight, so under `swift test` in Debug the resolved value is
+    /// `development`; the Release leg of the suite exercises `testflight`.
+    /// `TestModeResolverTests` pins the full table independent of the build.)
+    func testHandshakeReportsTestFlightEnvironment() throws {
+        let got = try handshakeEnvironmentType(
+            options: BeaconstatOptions(),
+            environment: ["device.platform": "ios", "run_context.is_testflight": "true"])
+        XCTAssertEqual(got, isDebugOrSimulator ? "development" : "testflight")
+    }
+
+    func testHandshakeReportsProductionWhenTestFlightOptedOut() throws {
+        var o = BeaconstatOptions(); o.routeTestFlightToTest = false
+        let got = try handshakeEnvironmentType(
+            options: o, environment: ["device.platform": "ios", "run_context.is_testflight": "true"])
+        XCTAssertEqual(got, isDebugOrSimulator ? "development" : "production")
+    }
+
+    func testHandshakeReportsProductionWhenForced() throws {
+        var o = BeaconstatOptions(); o.testMode = .forceProduction
+        let got = try handshakeEnvironmentType(
+            options: o, environment: ["device.platform": "ios", "run_context.is_testflight": "true"])
+        XCTAssertEqual(got, "production")
+    }
+
+    func testHandshakeReportsDevelopmentWhenForcedToTest() throws {
+        var o = BeaconstatOptions(); o.testMode = .forceTest
+        let got = try handshakeEnvironmentType(options: o, environment: ["device.platform": "ios"])
+        XCTAssertEqual(got, "development")
+    }
 }

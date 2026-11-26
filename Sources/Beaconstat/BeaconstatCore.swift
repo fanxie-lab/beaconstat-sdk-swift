@@ -17,7 +17,7 @@ import Foundation
 ///
 /// - **Every** mutable stored property below — `configuration`, `transport`,
 ///   `session`, `collecting`, `logger`, `siteToken`, `handshaking`,
-///   `environment`, `volatileEnvironment`, `routesToTest`, `queue_`,
+///   `environment`, `volatileEnvironment`, `routesToTest`, `environmentType`, `queue_`,
 ///   `flushTimer`, `flushing`, `outstandingNetworkOps`, `stoppedForAuth`,
 ///   `retryCount`, `retryTimer`, `sessionManager`, `reachability`,
 ///   `lifecycleStarted`, `inBackground`, `reportedStoreDegradation`,
@@ -78,6 +78,8 @@ final class BeaconstatCore: @unchecked Sendable {
     /// the main thread, once per foreground transition (L1).
     private var volatileEnvironment: (@Sendable () -> [String: String])?
     private var routesToTest = false
+    /// What the handshake reports; resolved with `routesToTest` at configure.
+    private var environmentType = "production"
     private var queue_: EventQueue?
     private var flushTimer: DispatchSourceTimer?
     private var flushing = false
@@ -236,6 +238,10 @@ final class BeaconstatCore: @unchecked Sendable {
                 (self.store as? KeychainAccessGroupConfigurable)?
                     .setKeychainAccessGroup(opts.keychainAccessGroup)
                 self.routesToTest = TestModeResolver.routesToTest(
+                    opts.testMode, isDebug: Self.isDebugBuild, isSimulator: Self.isSimulator,
+                    isTestFlight: environment["run_context.is_testflight"] == "true",
+                    routeTestFlightToTest: opts.routeTestFlightToTest)
+                self.environmentType = TestModeResolver.environmentType(
                     opts.testMode, isDebug: Self.isDebugBuild, isSimulator: Self.isSimulator,
                     isTestFlight: environment["run_context.is_testflight"] == "true",
                     routeTestFlightToTest: opts.routeTestFlightToTest)
@@ -461,7 +467,6 @@ final class BeaconstatCore: @unchecked Sendable {
               let config = configuration, let transport = transport,
               let installId = Fingerprint.installId(store: store) else { return }
         let fingerprint = Fingerprint.compute(bundleIdentifier: bundleIdentifier, installId: installId)
-        let environmentType = routesToTest ? "development" : "production"
         handshaking = true
         outstandingNetworkOps += 1
         transport.handshake(apiKey: config.publicKey, fingerprint: fingerprint,
