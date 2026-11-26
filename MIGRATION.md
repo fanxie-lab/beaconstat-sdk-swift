@@ -1,3 +1,30 @@
+# Migrating from 1.1 to 1.2
+
+No source changes are required. One default changed, and it affects your data.
+
+**TestFlight builds now go to test data by default.**
+`BeaconstatOptions.routeTestFlightToTest` defaults to `true` (it was `false`).
+Under `testMode = .automatic`, a TestFlight build now sends its events to the
+test endpoint and reports `environmentType: "testflight"` at handshake, so
+beta-tester activity no longer appears in your production figures. It shows in
+the dashboard's test view instead, labelled `testflight`.
+
+To keep counting TestFlight testers as production, opt out:
+
+```swift
+var options = BeaconstatOptions()
+options.routeTestFlightToTest = false
+Beaconstat.configure(publicKey: "bcs_pub_…", hmacSecret: "…", options: options)
+```
+
+`testMode = .forceProduction` and `.forceTest` are unaffected: they win over
+this flag, as before.
+
+When comparing figures across the upgrade, expect production installs and
+events to drop by your TestFlight audience from the first 1.2 build onward.
+
+---
+
 # Migrating from 1.0.0 to 1.1.0
 
 **This release contains breaking changes.** One of them breaks the build; the
